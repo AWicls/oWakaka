@@ -1,0 +1,10 @@
+/target
+
+# 密钥与本地配置（API key 等不进代码库）
+.env
+*.local.toml
+
+# 本地数据库文件
+*.db
+*.sqlite
+*.sqlite3
