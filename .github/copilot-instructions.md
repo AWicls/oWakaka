@@ -16,3 +16,8 @@
 - 每步交付前：`cargo fmt --check` + `cargo clippy --all-targets` 零警告 + `cargo test` 全绿；真实网络测试标 `#[ignore]`
 - UI 交互行为不得自报验收：交付附「待用户目测清单」
 - 编辑 CHANGELOG 先读目标区块再改；发布归档一次整块替换，防旧串吞条目
+
+## 工具约定
+- 检索本地 src 代码优先用 codegraph MCP（`codegraph_explore`：一次返回源码+调用链+影响范围；详见 codegraph-usage skill）；MCP 不可用回退 CLI `codegraph explore`，再不行才 grep+read
+- codegraph 只索引本仓库源码：第三方 API（Slint/reqwest 等）仍按 slint 指令走官方文档/本机源码查证
+- 刚编辑过的文件可能未同步进索引（~2s debounce），拿不准时直接 Read 该文件
