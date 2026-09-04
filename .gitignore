@@ -12,3 +12,6 @@ config.toml
 *.db
 *.sqlite
 *.sqlite3
+
+# codegraph 本地索引（衍生数据，不入库）
+.codegraph/
