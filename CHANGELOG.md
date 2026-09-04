@@ -8,6 +8,9 @@
 ## [Unreleased]
 
 ### Added
+- 流式对话 `Client::chat_stream`（SSE，**默认推荐入口**）：请求体注入 `stream: true`，逐段回调文本增量，`data: [DONE]` 或 EOF 结束；坏 `data:` 行报 `ChatError::Decode` 立即中止；零新增依赖（复用 reqwest 核心 chunk API）
+- 流式分块 DTO（`dto/openai_chat/chunk.rs`）：`Chunk`/`ChunkChoice`/`Delta`，容忍 delta 缺省 role/content、末块仅 finish_reason，附解析 doctest
+- 离线单测 `sse_line_dispatch`：验证注释行/心跳/非 data 字段/增量/哨兵/坏 JSON 六类行分发规则
 - ai 模块链完整文档注释（`//!` 模块级 + `///` 条目/字段级），含 4 个可离线运行的文档测试：配置加载、请求 extra 平铺序列化、响应未知字段收集、客户端构造
 - OpenAI chat 兼容非流式客户端（`src/ai/client.rs`）：通用 `Client::from_config` + `chat()`，任意提供 `/chat/completions` 的网关可用；非 2xx 返回带状态码与原始响应体的 `ChatError`
 - TOML 配置加载（`src/ai/config.rs`）：`base_url`/`api_key`/`model` 三要素，模板 `config.example.toml` 入库；`Config::load()` 供正式代码读取 `config.toml`
