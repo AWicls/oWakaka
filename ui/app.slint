@@ -13,99 +13,98 @@ export struct ChatMessage {
     tauto: bool, // 未被手动干预：思考完成时"部分"态自动转收起
 }
 
-/// 思考过程块：宽度/位置由使用方给出（组件根内不可用 parent），位于回答气泡上方。
-/// 点击卡片任意处循环三态；"部分"态只露出最新 3 行。
-component ThinkingBlock inherits Rectangle {
+/// 单条消息：assistant = Thinking 按钮 + 思考面板 + 回答卡 + 复制钮；user = 右对齐回答卡。
+/// 回答卡宽度随内容自适应（上限 82%）；思考面板固定占宽 82%，收起时由 ScrollView 原生裁剪，不外泄。
+component Bubble inherits Rectangle {
     in property <ChatMessage> msg;
-    callback toggled();
-    property <bool> is-open: msg.tstate != 0;
+    callback think-toggled();
+    callback copy-request(string);
 
-    visible: msg.thinking != "";
-    height: header.height + 12px + (is-open ? body.height : 0px);
-    border-radius: 14px;
-    background: #232429;
-    border-width: 1px;
-    border-color: #3a3c44;
+    property <bool> has-thinking: msg.role == "assistant" && msg.thinking != "";
+    property <bool> thinking-open: has-thinking && msg.tstate != 0;
+    property <bool> has-answer: msg.text != ""; // user 消息恒非空
 
-    header := Text {
-        x: 14px;
-        y: 6px;
-        width: parent.width - 28px;
-        // 流式思考中（还没有回答）显示进行时文案
-        text: (msg.tstate == 0 ? "▸ " : "▾ ") + (msg.text == "" && msg.tauto ? "思考中…" : "思考过程");
-        color: #9aa0aa;
-        font-size: 13px;
+    // —— 思考切换按钮：附在回答气泡上方左侧，文字统一为 Thinking…… ——
+    think-btn := TouchArea {
+        visible: root.has-thinking;
+        x: 16px;
+        y: 4px;
+        width: think-lbl.width + 8px;
+        height: think-lbl.height + 6px;
+        mouse-cursor: pointer;
+        clicked => { root.think-toggled(); }
+        think-lbl := Text {
+            x: 4px;
+            y: 3px;
+            text: (root.msg.tstate == 0 ? "▸ " : "▾ ") + "Thinking……";
+            color: #8f96a3;
+            font-size: 13px;
+        }
     }
-    body := Rectangle {
-        clip: true;
-        x: 14px;
-        y: header.y + header.height + 4px;
-        width: parent.width - 28px;
-        // 部分态固定 3 行高（13px 字号行高约 18px）；全开态完整高度
-        height: root.msg.tstate == 1 ? 54px : think-text.height;
+
+    // —— 思考内容面板：部分态 3 行高可滚动，全开态完整展示 ——
+    think-panel := ScrollView {
+        visible: root.thinking-open;
+        x: 16px;
+        y: think-btn.y + think-btn.height + 2px;
+        width: root.width * 0.82;
+        height: root.msg.tstate == 1 ? 54px : think-text.height + 4px;
+        // 粘底跟随最新增量；内容不变时滚轮写入 viewport-y 不被覆盖，可手动回看
+        viewport-y: self.viewport-height - self.height;
         think-text := Text {
-            y: min(0px, parent.height - self.height); // 部分态锚底：露出最新内容
-            width: parent.width;
+            width: parent.width - 8px;
             text: root.msg.thinking;
             wrap: word-wrap;
             color: #b8bec8;
             font-size: 13px;
         }
     }
-    touch := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        clicked => { root.toggled(); }
-    }
-}
 
-/// 单条消息：assistant = 思考块 + 回答卡；user = 仅回答卡，右对齐。
-/// 回答卡宽度随内容自适应，上限 82%，靠向各自一侧。
-component Bubble inherits Rectangle {
-    in property <ChatMessage> msg;
-    callback think-toggled();
-
-    height: answer.visible ? answer.y + answer.height + 12px : tb.y + tb.height + 12px;
-
-    // 离屏测量文本（不折行且未约束宽度），其 width 即内容自然宽度
-    measure := Text {
-        text: root.msg.text;
-        opacity: 0;
-        x: 0px;
-        y: -10000px;
-    }
-
-    tb := ThinkingBlock {
-        x: 16px;
-        y: 6px;
-        // 思考块不受回答内容宽度限制，固定占 82%
-        width: root.width * 0.82;
-        msg: root.msg;
-        toggled => { root.think-toggled(); }
-    }
-
+    // —— 回答卡：宽度取正文自然宽（preferred-width），上限 82%，靠向发言侧 ——
     answer := Rectangle {
         property <bool> is-user: root.msg.role == "user";
-        // 助手尚未产出回答正文时隐藏（思考流式阶段不留空气泡）
-        visible: is-user || root.msg.text != "";
-        // 宽度随内容自然宽自适应，上限 82%（measure 为离屏不折行文本）
-        width: min(max(measure.width + 28px, 64px), root.width * 0.82);
+        visible: root.has-answer;
+        width: min(max(msg-text.preferred-width + 24px, 48px), root.width * 0.82);
         x: is-user ? root.width - self.width - 16px : 16px;
-        y: tb.visible && !is-user ? tb.y + tb.height + 4px : 6px;
+        y: thinking-open ? think-panel.y + think-panel.height + 4px
+            : has-thinking ? think-btn.y + think-btn.height + 4px
+            : 6px;
         border-radius: 14px;
         background: is-user ? #2f6fed : #2c2e35;
         height: msg-text.height + 16px;
 
         msg-text := Text {
-            x: 14px;
+            x: 12px;
             y: 8px;
-            width: parent.width - 28px;
+            width: parent.width - 24px;
             text: root.msg.text;
             wrap: word-wrap;
             color: #f3f4f6;
             horizontal-alignment: answer.is-user ? right : left;
         }
     }
+
+    // —— 复制按钮：回答气泡下方的最右边 ——
+    copy-btn := TouchArea {
+        visible: answer.visible && root.msg.role == "assistant";
+        x: answer.x + answer.width - self.width;
+        y: answer.y + answer.height + 2px;
+        width: copy-lbl.width + 12px;
+        height: copy-lbl.height + 6px;
+        mouse-cursor: pointer;
+        clicked => { root.copy-request(root.msg.text); }
+        copy-lbl := Text {
+            x: 6px;
+            y: 3px;
+            text: "复制";
+            color: #8f96a3;
+            font-size: 12px;
+        }
+    }
+
+    height: root.has-answer
+        ? answer.y + answer.height + (copy-btn.visible ? copy-btn.height + 4px : 12px)
+        : (thinking-open ? think-panel.y + think-panel.height : think-btn.y + think-btn.height) + 12px;
 }
 
 export component AppWindow inherits Window {
@@ -120,6 +119,7 @@ export component AppWindow inherits Window {
     in property <[ChatMessage]> messages;
     in property <bool> busy;
     callback send(string);
+    callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
 
     VerticalLayout {
         padding: 8px;
@@ -137,6 +137,7 @@ export component AppWindow inherits Window {
                         m.tstate = Math.mod(m.tstate + 1, 3);
                         m.tauto = false;
                     }
+                    copy-request(text) => { root.copy(text); }
                 }
             }
         }

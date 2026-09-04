@@ -104,6 +104,13 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // —— 复制路径：Slint 无剪贴板 API，经 arboard 写系统剪贴板 ——
+    window.on_copy(move |text| {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text.to_string());
+        }
+    });
+
     // —— 回流路径：Timer 排空事件队列，增量并入当前助手气泡 ——
     {
         let window_weak = window.as_weak();

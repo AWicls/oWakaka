@@ -7,10 +7,19 @@
 
 ## [Unreleased]
 
+### Fixed
+- 思考过程收起态内容外泄背景：思考面板改用 ScrollView（原生裁剪）
+
 ### Added
-- 思考过程展示（推理模型 `reasoning_content`/`reasoning` 增量）：client 层 `StreamEvent::{Reasoning, Content}` 事件分流；UI 思考块置于回答气泡上方，三态（收起/部分/全开，默认部分=最新 3 行），思考完成自动收起、手动切换后固定状态
+- 思考过程展示（推理模型 `reasoning_content`/`reasoning` 增量）：client 层 `StreamEvent::{Reasoning, Content}` 事件分流；三态（收起/部分/全开，默认部分=最新 3 行），思考完成自动收起、手动切换后固定状态
+- 回答气泡下方最右侧"复制"按钮，经 arboard 写系统剪贴板（Slint 无剪贴板 API，新增依赖 arboard）
 - 自动粘底滚动：新内容与流式增量始终保持可见
-- 回答气泡宽度随内容自适应（上限 82%，靠向发言侧）；思考块固定占宽 82% 不受回答限制
+
+### Changed
+- 思考入口改为回答气泡上方左侧的 `Thinking……` 小按钮（原整卡可点）；"部分"态思考面板 3 行高且可滚动回看（粘底仅随新内容移动）
+- 回答气泡宽度改用 `Text.preferred-width` 精确测量并对齐内容（上限 82%，靠向发言侧）；收窄内边距（28→24px）与最小宽（64→48px）；思考面板固定占宽 82% 不受回答限制
+
+### Changed（历史轮次）
 
 ### Changed
 - UI 逻辑从 `main.rs` 迁入库目标新模块 `src/ui.rs`：`ui::run()` 为 UI 专属接口，`main.rs` 瘦身为纯转发入口；内部拆出 `snapshot_history`/`ensure_client`/`spawn_chat`/`append_assistant` 具名私有函数并补全模块级/条目级文档注释（含线程模型图）
