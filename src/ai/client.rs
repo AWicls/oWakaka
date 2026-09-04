@@ -1,3 +1,32 @@
+//! OpenAI chat 兼容客户端（非流式）。
+//!
+//! 端到端用法（构造部分可离线运行，`chat()` 需真实凭据）：
+//!
+//! ```
+//! use oWakaka::ai::{
+//!     client::Client,
+//!     config::Config,
+//!     dto::openai_chat::request::{Message, Request},
+//! };
+//!
+//! let cfg = Config {
+//!     base_url: "https://api.openai.com/v1".into(),
+//!     api_key: "sk-test".into(),
+//!     model: "gpt-4o-mini".into(),
+//! };
+//! let client = Client::from_config(&cfg);
+//! let req = Request {
+//!     model: cfg.model.clone(),
+//!     messages: vec![Message {
+//!         role: "user".into(),
+//!         content: "你好".into(),
+//!         extra: None,
+//!     }],
+//!     extra: None,
+//! };
+//! // 真实调用：let resp = client.chat(&req).await?;（见 #[ignore] 集成测试）
+//! ```
+
 use std::time::Duration;
 
 use crate::ai::{
@@ -5,13 +34,16 @@ use crate::ai::{
     dto::openai_chat::{request::Request, response::Response},
 };
 
+/// 对话请求的失败类型：区分"传输层问题"与"服务端业务错误"。
 #[derive(Debug)]
 pub enum ChatError {
-    /// 传输层失败（网络、超时、响应解析）
+    /// 传输层失败（连不上、超时、响应不是合法 JSON 等）
     Http(reqwest::Error),
-    /// 服务端返回非 2xx，携带原始状态码与响应体
+    /// 服务端返回非 2xx，原样携带状态码与响应体，便于排查厂家错误格式
     Api {
+        /// HTTP 状态码，如 401 / 429 / 500
         status: reqwest::StatusCode,
+        /// 原始响应体（通常是厂家的 JSON 错误详情）
         body: String,
     },
 }
@@ -33,14 +65,19 @@ impl From<reqwest::Error> for ChatError {
     }
 }
 
-/// OpenAI chat 兼容客户端，对任何提供 `/chat/completions` 的网关通用
+/// OpenAI chat 兼容客户端，对任何提供 `/chat/completions` 的网关通用。
+///
+/// 无状态：可跨任务克隆共享的是内部 `reqwest::Client`（自带连接池），
+/// 因此同一 `Config` 建一个实例长期使用即可。
 pub struct Client {
     http: reqwest::Client,
+    /// 已去掉末尾斜杠的 API 根地址
     base_url: String,
     api_key: String,
 }
 
 impl Client {
+    /// 由配置构建客户端。`base_url` 末尾多余的 `/` 会被归一化。
     pub fn from_config(cfg: &Config) -> Self {
         Self {
             // 超时仅防挂死，builder 失败时退回默认客户端
@@ -53,7 +90,10 @@ impl Client {
         }
     }
 
-    /// 非流式对话：POST {base_url}/chat/completions
+    /// 非流式对话：`POST {base_url}/chat/completions`，Bearer 鉴权，JSON 收发。
+    ///
+    /// 错误语义见 [`ChatError`]：非 2xx 不会尝试解析为 [`Response`]，
+    /// 而是把状态码与原始响应体完整带出，保证厂家错误信息不丢。
     pub async fn chat(&self, req: &Request) -> Result<Response, ChatError> {
         let resp = self
             .http
