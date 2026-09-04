@@ -1,19 +1,28 @@
 //! OpenAI chat 兼容客户端（非流式）。
 //!
-//! 端到端用法（构造部分可离线运行，`chat()` 需真实凭据）：
+//! 端到端用法，演示真实路径"配置文件 → `load_toml` → `Client`"
+//! （`chat()` 需真实凭据，此处用临时文件自给自足）：
 //!
 //! ```
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use o_wakaka::ai::{
 //!     client::Client,
-//!     config::Config,
+//!     config::{Config, load_toml, store_toml},
 //!     dto::openai_chat::request::{Message, Request},
 //! };
 //!
-//! let cfg = Config {
-//!     base_url: "https://api.openai.com/v1".into(),
-//!     api_key: "sk-test".into(),
-//!     model: "gpt-4o-mini".into(),
-//! };
+//! let path = std::env::temp_dir().join("o_wakaka_client_doctest.toml");
+//! store_toml(
+//!     &Config {
+//!         base_url: "https://api.openai.com/v1".into(),
+//!         api_key: "sk-test".into(),
+//!         model: "gpt-4o-mini".into(),
+//!     },
+//!     &path,
+//! )?;
+//! let cfg: Config = load_toml(&path)?;
+//! std::fs::remove_file(&path).ok();
+//!
 //! let client = Client::from_config(&cfg);
 //! let req = Request {
 //!     model: cfg.model.clone(),
@@ -25,6 +34,8 @@
 //!     extra: None,
 //! };
 //! // 真实调用：let resp = client.chat(&req).await?;（见 #[ignore] 集成测试）
+//! # Ok(())
+//! # }
 //! ```
 
 use std::time::Duration;
