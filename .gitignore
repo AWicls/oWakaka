@@ -1,5 +1,8 @@
 /target
 
+# 编辑器本地配置（可能含本地路径/密钥）
+.vscode/
+
 # 密钥与本地配置（API key 等不进代码库）
 .env
 *.local.toml
