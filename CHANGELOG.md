@@ -20,6 +20,9 @@
 - 新增 `ChatError::Decode`：2xx 但响应体非合法 JSON 时携带解析错误与原始响应体，不再退化为难排查的传输错误
 - lib 目标更名 `o_wakaka`（crate snake_case 规范）、`openai_response` 占位 `input`→`Input`；`cargo fmt`/`cargo clippy --all-targets` 达成零警告
 
+### Changed
+- 通用 TOML 配置读写工具（`load_toml`/`store_toml`，任意 serde 类型可用）取代 `Config::from_file`；文档测试改为在系统临时目录自造配置做读写往返，不再依赖本地 `config.test.toml`（该文件现仅供 `#[ignore]` 真实凭据测试）
+
 ## [0.1.0] - 2026-09-04
 
 ### Added
