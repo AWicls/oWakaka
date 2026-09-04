@@ -13,7 +13,7 @@
 //! ```text
 //! 主线程  用户输入 ──▶ on_send ──▶ spawn_chat ──▶ tokio 后台任务
 //!   ▲                                             │ chat_stream
-//!   │ Timer 30ms 排空                             │ delta/Done/Error
+//!   │ Timer 30ms 排空                             │ Reasoning/Content/Done/Error
 //!   └── UiEvent ◀──────── mpsc::channel ◀─────────┘
 //! ```
 //!
@@ -27,7 +27,7 @@ use std::{
 };
 
 use crate::ai::{
-    client::Client,
+    client::{Client, StreamEvent},
     config::Config,
     dto::openai_chat::request::{Message, Request},
 };
@@ -35,10 +35,12 @@ use slint::{Model, SharedString, Timer, TimerMode, VecModel};
 
 slint::include_modules!();
 
-/// 后台任务 → UI 的事件流。
+/// 后台任务 → UI 的事件流（与 `StreamEvent` 一一对应，外加收尾信号）。
 enum UiEvent {
-    /// 一段流式文本增量
-    Delta(String),
+    /// 思考过程文本增量
+    Reasoning(String),
+    /// 回答正文文本增量
+    Content(String),
     /// 本轮回复正常结束
     Done,
     /// 本轮回复失败，携带可展示的简述文本
@@ -50,6 +52,11 @@ enum UiEvent {
 /// 连接池应跨多次发送复用，故 `Client` 建一次存起来；`model` 与它同源（来自
 /// 同一份 config），一并缓存避免二次读文件。
 type ClientCache = Arc<Mutex<Option<(Arc<Client>, String)>>>;
+
+/// 思考展示态取值，与 `ui/app.slint` 中 `ChatMessage.tstate` 的注释约定一致
+const STATE_COLLAPSED: i32 = 0;
+/// 默认态：只露出最新 3 行，思考完成后会被自动收起
+const STATE_PARTIAL: i32 = 1;
 
 /// UI 主入口：构建窗口、接线交互、运行 Slint 事件循环直到窗口关闭。
 ///
@@ -78,6 +85,9 @@ pub fn run() -> Result<(), slint::PlatformError> {
             messages.push(ChatMessage {
                 role: "user".into(),
                 text: text.into(),
+                thinking: SharedString::default(),
+                tstate: STATE_PARTIAL,
+                tauto: true,
             });
             let history = snapshot_history(&messages);
 
@@ -85,7 +95,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let (client, model) = match ensure_client(&cache) {
                 Ok(pair) => pair,
                 Err(msg) => {
-                    append_assistant(&messages, &format!("[配置错误] {msg}"));
+                    append_part(&messages, false, &format!("[配置错误] {msg}"));
                     return;
                 }
             };
@@ -94,14 +104,11 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // —— 回流路径：Timer 排空事件队列，增量并入助手气泡 ——
+    // —— 回流路径：Timer 排空事件队列，增量并入当前助手气泡 ——
     {
         let window_weak = window.as_weak();
-        let messages = messages.clone();
-        let append = {
-            let messages = messages.clone();
-            move |text: String| append_assistant(&messages, &text)
-        };
+        let fold_messages = messages.clone();
+        let push = move |thinking: bool, text: String| append_part(&messages, thinking, &text);
         let timer = Timer::default();
         timer.start(TimerMode::Repeated, Duration::from_millis(30), move || {
             let Some(window) = window_weak.upgrade() else {
@@ -109,12 +116,16 @@ pub fn run() -> Result<(), slint::PlatformError> {
             };
             for event in rx.try_iter() {
                 match event {
-                    UiEvent::Delta(t) => append(t),
-                    UiEvent::Done => window.set_busy(false),
+                    UiEvent::Reasoning(t) => push(true, t),
+                    UiEvent::Content(t) => push(false, t),
+                    UiEvent::Done => {
+                        fold_tail(&fold_messages); // 兜底：纯思考回复也要收起
+                        window.set_busy(false);
+                    }
                     UiEvent::Error(e) => {
                         // 错误详情截断，防止超长网关响应体撑爆气泡
                         let brief: String = e.chars().take(300).collect();
-                        append(format!("\n[出错] {brief}"));
+                        push(false, format!("\n[出错] {brief}"));
                         window.set_busy(false);
                     }
                 }
@@ -174,8 +185,12 @@ fn spawn_chat(
             extra: None,
         };
         let result = client
-            .chat_stream(&req, move |t| {
-                let _ = tx_delta.send(UiEvent::Delta(t.to_string()));
+            .chat_stream(&req, move |ev| {
+                let ui = match ev {
+                    StreamEvent::Reasoning(t) => UiEvent::Reasoning(t),
+                    StreamEvent::Content(t) => UiEvent::Content(t),
+                };
+                let _ = tx_delta.send(ui);
             })
             .await;
         let _ = tx_final.send(match result {
@@ -185,21 +200,55 @@ fn spawn_chat(
     });
 }
 
-/// 把 `text` 并入尾部助手气泡；若尾气泡不是 assistant 则新开一条。
+/// 把一段文本增量并入"当前回答"：尾部是 assistant 气泡则合并，否则新开一条。
 ///
-/// 流式增量、错误标注、配置提示共用此函数：发送刚结束时尾气泡必为 user，
-/// 首个增量会自然新开 assistant 气泡，后续增量则原地追加。
-fn append_assistant(messages: &Rc<VecModel<ChatMessage>>, text: &str) {
+/// `thinking=true` 追加到思考过程，`false` 追加到回答正文；追加正文即视为
+/// "思考已完成"，同步触发自动收起（见 [`fold_thinking`]）。
+fn append_part(messages: &Rc<VecModel<ChatMessage>>, thinking: bool, text: &str) {
     let last = messages.row_count().saturating_sub(1);
     if let Some(mut row) = messages.row_data(last)
         && row.role == "assistant"
     {
-        row.text = SharedString::from(format!("{}{text}", row.text));
+        if thinking {
+            row.thinking = SharedString::from(format!("{}{}", row.thinking, text));
+        } else {
+            row.text = SharedString::from(format!("{}{}", row.text, text));
+            fold_thinking(&mut row);
+        }
         messages.set_row_data(last, row);
     } else {
         messages.push(ChatMessage {
             role: "assistant".into(),
-            text: text.into(),
+            text: if thinking {
+                SharedString::default()
+            } else {
+                text.into()
+            },
+            thinking: if thinking {
+                text.into()
+            } else {
+                SharedString::default()
+            },
+            tstate: STATE_PARTIAL,
+            tauto: true,
         });
+    }
+}
+
+/// 思考完成时的自动收起：仅"部分且未手动干预"生效；手动切换的状态固定不变。
+fn fold_thinking(row: &mut ChatMessage) {
+    if row.tauto && row.tstate == STATE_PARTIAL {
+        row.tstate = STATE_COLLAPSED;
+    }
+}
+
+/// 对尾部 assistant 气泡执行 [`fold_thinking`]（Done 兜底：只思考不答的流）。
+fn fold_tail(messages: &Rc<VecModel<ChatMessage>>) {
+    let last = messages.row_count().saturating_sub(1);
+    if let Some(mut row) = messages.row_data(last)
+        && row.role == "assistant"
+    {
+        fold_thinking(&mut row);
+        messages.set_row_data(last, row);
     }
 }

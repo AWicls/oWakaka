@@ -61,7 +61,8 @@ pub struct Delta {
     /// 文本增量；`None` = 本块无文本（如仅含 role 或工具调用）
     #[serde(default)]
     pub content: Option<String>,
-    /// 工具调用等扩展字段平铺收集
+    /// 厂家扩展字段平铺收集：推理模型的思考文本即在此（`reasoning_content` / `reasoning`），
+    /// 由 `Client::chat_stream` 转成 `StreamEvent::Reasoning`
     #[serde(flatten)]
     pub extra: Option<serde_json::Value>,
 }

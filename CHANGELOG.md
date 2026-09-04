@@ -7,6 +7,11 @@
 
 ## [Unreleased]
 
+### Added
+- 思考过程展示（推理模型 `reasoning_content`/`reasoning` 增量）：client 层 `StreamEvent::{Reasoning, Content}` 事件分流；UI 思考块置于回答气泡上方，三态（收起/部分/全开，默认部分=最新 3 行），思考完成自动收起、手动切换后固定状态
+- 自动粘底滚动：新内容与流式增量始终保持可见
+- 回答气泡宽度随内容自适应（上限 82%，靠向发言侧）；思考块固定占宽 82% 不受回答限制
+
 ### Changed
 - UI 逻辑从 `main.rs` 迁入库目标新模块 `src/ui.rs`：`ui::run()` 为 UI 专属接口，`main.rs` 瘦身为纯转发入口；内部拆出 `snapshot_history`/`ensure_client`/`spawn_chat`/`append_assistant` 具名私有函数并补全模块级/条目级文档注释（含线程模型图）
 

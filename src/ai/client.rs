@@ -87,6 +87,19 @@ impl From<reqwest::Error> for ChatError {
     }
 }
 
+/// 流式对话的事件：思考增量与回答增量，思考天然先于回答到达。
+///
+/// 推理模型（DeepSeek-R1、QwQ、Kimi 等及其网关）在 `delta` 中以非标字段
+/// `reasoning_content` 或 `reasoning` 携带思考文本，经 [`Delta`](crate::ai::dto::openai_chat::chunk::Delta)
+/// 的 `extra` 平铺捕获后转成本事件；不支持思考的模型只会发 [`Content`](StreamEvent::Content)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamEvent {
+    /// 思考过程文本增量
+    Reasoning(String),
+    /// 回答正文文本增量
+    Content(String),
+}
+
 /// OpenAI chat 兼容客户端，对任何提供 `/chat/completions` 的网关通用。
 ///
 /// 无状态：可跨任务克隆共享的是内部 `reqwest::Client`（自带连接池），
@@ -136,17 +149,17 @@ impl Client {
     }
 
     /// 流式对话（默认推荐）：注入 `stream: true` 后请求同一端点，
-    /// 每收到一段非空文本增量就同步调用 `on_delta`，读到 `data: [DONE]`
-    /// 或连接自然关闭即返回 `Ok(())`。
+    /// 每收到一段思考/回答文本增量就同步回调 [`StreamEvent`]，
+    /// 读到 `data: [DONE]` 或连接自然关闭即返回 `Ok(())`。
     ///
     /// 语义约定：
     /// - 错误同 [`chat`](Self::chat)；流中途出错时，之前已回调的增量不回滚
-    /// - `on_delta` 在读循环内同步执行，回调做重活会背压网络读取（UI 刷新场景通常正是期望行为）
+    /// - `on_event` 在读循环内同步执行，回调做重活会背压网络读取（UI 刷新场景通常正是期望行为）
     /// - 个别网关不发 `[DONE]`，EOF 视为正常结束而非错误
     pub async fn chat_stream(
         &self,
         req: &Request,
-        mut on_delta: impl FnMut(&str),
+        mut on_event: impl FnMut(StreamEvent),
     ) -> Result<(), ChatError> {
         // stream 标志注入序列化后的请求体，不污染 Request DTO
         let mut body = serde_json::to_value(req).map_err(|e| ChatError::Decode {
@@ -176,7 +189,7 @@ impl Client {
                 let raw: Vec<u8> = buf.drain(..=pos).collect();
                 let line = String::from_utf8_lossy(&raw);
                 // 收到终止哨兵即返回：同块残留字节不再消费
-                if handle_sse_line(line.trim_end(), &mut on_delta)? {
+                if handle_sse_line(line.trim_end(), &mut on_event)? {
                     return Ok(());
                 }
             }
@@ -187,7 +200,7 @@ impl Client {
         }
         let tail = String::from_utf8_lossy(&buf).trim().to_string();
         if !tail.is_empty() {
-            handle_sse_line(&tail, &mut on_delta)?;
+            handle_sse_line(&tail, &mut on_event)?;
         }
         Ok(())
     }
@@ -197,7 +210,8 @@ impl Client {
 ///
 /// 忽略规则：空行（事件边界）、`:` 注释行、非 `data:` 字段行；
 /// `data:` 行 JSON 解析失败视为协议错误，立即中止。
-fn handle_sse_line(line: &str, on_delta: &mut impl FnMut(&str)) -> Result<bool, ChatError> {
+/// 同一块内先发思考增量（若有）再发回答增量，保证"先思考后作答"的事件顺序。
+fn handle_sse_line(line: &str, on_event: &mut impl FnMut(StreamEvent)) -> Result<bool, ChatError> {
     let line = line.trim_end_matches('\r').trim();
     if line.is_empty() || line.starts_with(':') {
         return Ok(false);
@@ -213,13 +227,24 @@ fn handle_sse_line(line: &str, on_delta: &mut impl FnMut(&str)) -> Result<bool, 
         error: e.to_string(),
         body: data.to_string(),
     })?;
-    if let Some(text) = chunk
-        .choices
-        .first()
-        .and_then(|c| c.delta.content.as_deref())
+    let Some(choice) = chunk.choices.first() else {
+        return Ok(false);
+    };
+    // 思考文本：非标字段，各厂家取 reasoning_content 或 reasoning
+    if let Some(r) = choice
+        .delta
+        .extra
+        .as_ref()
+        .and_then(|v| v.get("reasoning_content").or_else(|| v.get("reasoning")))
+        .and_then(|x| x.as_str())
+        && !r.is_empty()
+    {
+        on_event(StreamEvent::Reasoning(r.to_string()));
+    }
+    if let Some(text) = choice.delta.content.as_deref()
         && !text.is_empty()
     {
-        on_delta(text);
+        on_event(StreamEvent::Content(text.to_string()));
     }
     Ok(false)
 }
@@ -259,7 +284,7 @@ mod tests {
         println!("模型回复: {content}");
     }
 
-    /// 真实流式测试（默认推荐路径）：断言至少累积出非空文本
+    /// 真实流式测试（默认推荐路径）：断言回答增量非空；思考增量按模型能力计数
     #[tokio::test]
     #[ignore = "需要 config.test.toml 中的真实凭据"]
     async fn chat_stream_roundtrip() {
@@ -275,38 +300,51 @@ mod tests {
             }],
             extra: None,
         };
-        let mut parts: Vec<String> = Vec::new();
+        let mut thinking: Vec<String> = Vec::new();
+        let mut answer: Vec<String> = Vec::new();
         client
-            .chat_stream(&req, |t| parts.push(t.to_string()))
+            .chat_stream(&req, |ev| match ev {
+                StreamEvent::Reasoning(t) => thinking.push(t),
+                StreamEvent::Content(t) => answer.push(t),
+            })
             .await
             .expect("流式请求失败");
-        let full: String = parts.concat();
-        assert!(!full.trim().is_empty(), "未收到任何文本增量");
+        let full = answer.concat();
+        assert!(!full.trim().is_empty(), "未收到任何回答增量");
         println!(
-            "流式收到 {} 段增量，共 {} 字: {full}",
-            parts.len(),
+            "思考 {} 段/{} 字，回答 {} 段/{} 字: {full}",
+            thinking.len(),
+            thinking.concat().chars().count(),
+            answer.len(),
             full.chars().count()
         );
     }
 
-    /// 离线验证 SSE 行分发规则：哨兵、注释、心跳、增量、坏 JSON
+    /// 离线验证 SSE 行分发规则：哨兵、注释、心跳、思考+回答顺序、坏 JSON
     #[test]
     fn sse_line_dispatch() {
-        let mut got = String::new();
+        let mut got: Vec<StreamEvent> = Vec::new();
         // 空行 / 注释行 / 非 data 字段：忽略且不终止
-        assert!(!handle_sse_line("", &mut |t: &str| got.push_str(t)).unwrap());
-        assert!(!handle_sse_line(": ping", &mut |t: &str| got.push_str(t)).unwrap());
-        assert!(!handle_sse_line("event: message", &mut |t: &str| got.push_str(t)).unwrap());
+        assert!(!handle_sse_line("", &mut |e| got.push(e)).unwrap());
+        assert!(!handle_sse_line(": ping", &mut |e| got.push(e)).unwrap());
+        assert!(!handle_sse_line("event: message", &mut |e| got.push(e)).unwrap());
         assert!(got.is_empty());
-        // 正常增量
-        let data = r#"{"choices":[{"index":0,"delta":{"content":"Hi"}}]}"#;
-        assert!(!handle_sse_line(&format!("data: {data}"), &mut |t| got.push_str(t)).unwrap());
-        assert_eq!(got, "Hi");
+        // 同一块内：思考增量必须先于回答增量
+        let data =
+            r#"{"choices":[{"index":0,"delta":{"content":"Hi","reasoning_content":"think"}}]}"#;
+        assert!(!handle_sse_line(&format!("data: {data}"), &mut |e| got.push(e)).unwrap());
+        assert_eq!(
+            got,
+            vec![
+                StreamEvent::Reasoning("think".into()),
+                StreamEvent::Content("Hi".into())
+            ]
+        );
         // 终止哨兵
-        assert!(handle_sse_line("data: [DONE]", &mut |t| got.push_str(t)).unwrap());
+        assert!(handle_sse_line("data: [DONE]", &mut |e| got.push(e)).unwrap());
         // 坏 JSON：报 Decode 而不是静默丢块
         assert!(matches!(
-            handle_sse_line("data: {broken", &mut |t| got.push_str(t)),
+            handle_sse_line("data: {broken", &mut |e| got.push(e)),
             Err(ChatError::Decode { .. })
         ));
     }
