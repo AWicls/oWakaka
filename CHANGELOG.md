@@ -9,7 +9,8 @@
 
 ### Fixed
 - 生成中滚到底部跳回顶部：`viewport-y` 为负值语义（0=顶部、`height-viewport-height`=底部），修正贴底公式符号
-- 思考完成后部分态无法滚动：改用 ScrollView 官方 `scrolled()` 回调（仅用户滚动触发）判定粘底脱离/恢复，替代被程序写入反复触发的 changed 方案
+- 思考完成后部分态无法滚动：内嵌 ScrollView 滚轮被外层截获，改为自绘滚动视图（TouchArea `scroll-event` + `accept` 消费滚轮），并支持贴底哨兵（滚回底部自动恢复跟随新内容）
+- "部分"态思考块从固定 3 行改为**最多 5 行、随内容自适应高度**
 - 思考过程收起态内容外泄背景：思考面板改用 ScrollView（原生裁剪）
 
 ### Added

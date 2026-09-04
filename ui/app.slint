@@ -9,7 +9,7 @@ export struct ChatMessage {
     role: string, // "user" | "assistant"
     text: string, // 回答正文
     thinking: string, // 思考过程全文（仅 assistant；无思考时为空）
-    tstate: int, // 思考展示态：0 收起 | 1 部分（最新3行）| 2 全开
+    tstate: int, // 思考展示态：0 收起 | 1 部分（最多5行，自适应）| 2 全开
     tauto: bool, // 未被手动干预：思考完成时"部分"态自动转收起
 }
 
@@ -42,46 +42,55 @@ component Bubble inherits Rectangle {
         }
     }
 
-    // —— 思考内容面板：透明灰底 + 灰色虚线框；部分态 3 行高可滚动，全开态完整展示 ——
+    // —— 思考内容面板：透明灰底 + 半透明灰边框 + 圆角；
+    //      部分态最多 5 行、按内容自适应高度、滚轮可自由回看；全开态完整展示 ——
     think-frame := Rectangle {
         visible: root.thinking-open;
         x: 16px;
         y: think-btn.y + think-btn.height + 4px;
         width: root.width * 0.82;
-        height: (root.msg.tstate == 1 ? 54px : think-text.height) + 12px;
+        height: think-view.height + 12px;
         background: #ffffff0a;
-        // Slint 1.17 核心无虚线描边能力：半透明实线灰框 + 透明灰底达成"虚灰框"观感
         border-width: 1px;
         border-color: #6b728099;
         border-radius: 8px;
         clip: true;
 
-        ScrollView {
+        // 嵌套 ScrollView 会丢滚轮（外层截获 + 行更新重建），改为自绘滚动视图：
+        // user-vy 存用户滚动位置；哨兵值 = 自动贴底（跟随最新内容）
+        think-view := Rectangle {
+            property <length> bottom: min(0px, self.height - think-text.height); // 全滚到底时的位置(≤0)
+            property <length> user-vy: 10000000px; // 哨兵 = 贴底跟随
+            property <length> eff-vy: user-vy >= 10000000px
+                ? bottom
+                : min(0px, max(bottom, user-vy));
+
             x: 6px;
             y: 6px;
             width: parent.width - 12px;
-            height: root.msg.tstate == 1 ? 54px : think-text.height;
-            // 粘底状态机（同消息列表）：scrolled 仅用户触发，负值语义
-            property <bool> stick: true;
-            scrolled => {
-                self.stick = self.viewport-y <= self.height - self.viewport-height + 2px;
-            }
-            changed viewport-height => {
-                if (self.stick) {
-                    self.viewport-y = self.height - self.viewport-height;
-                }
-            }
-            changed height => {
-                if (self.stick) {
-                    self.viewport-y = self.height - self.viewport-height;
-                }
-            }
+            // 部分态：内容不足 5 行（90px）时自适应收小，超出才滚动
+            height: root.msg.tstate == 1 ? min(think-text.height, 90px) : think-text.height;
+
             think-text := Text {
+                y: parent.eff-vy;
                 width: parent.width - 8px;
                 text: root.msg.thinking;
                 wrap: word-wrap;
                 color: #b8bec8;
                 font-size: 13px;
+            }
+            // 滚轮直接处理（accept 阻止外层列表截获）：落回底部 2px 内恢复贴底跟随
+            wheel-touch := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                scroll-event(ev) => {
+                    think-view.user-vy =
+                        (min(0px, max(think-view.bottom, think-view.eff-vy + ev.delta-y))
+                            - think-view.bottom) <= 2px
+                            ? 10000000px
+                            : min(0px, max(think-view.bottom, think-view.eff-vy + ev.delta-y));
+                    accept;
+                }
             }
         }
     }

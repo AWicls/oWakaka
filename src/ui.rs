@@ -55,7 +55,7 @@ type ClientCache = Arc<Mutex<Option<(Arc<Client>, String)>>>;
 
 /// 思考展示态取值，与 `ui/app.slint` 中 `ChatMessage.tstate` 的注释约定一致
 const STATE_COLLAPSED: i32 = 0;
-/// 默认态：只露出最新 3 行，思考完成后会被自动收起
+/// 默认态：最多 5 行、按内容自适应高度，思考完成后会被自动收起
 const STATE_PARTIAL: i32 = 1;
 
 /// UI 主入口：构建窗口、接线交互、运行 Slint 事件循环直到窗口关闭。
