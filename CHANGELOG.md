@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-05
+
 ### Fixed
 - 生成中滚到底部跳回顶部：`viewport-y` 为负值语义（0=顶部、`height-viewport-height`=底部），修正贴底公式符号
 - 思考完成后部分态无法滚动：内嵌 ScrollView 滚轮被外层截获，改为自绘滚动视图（TouchArea `scroll-event` + `accept` 消费滚轮），并支持贴底哨兵（滚回底部自动恢复跟随新内容）
@@ -24,7 +26,7 @@
 - 思考面板样式：透明灰底 + 半透明细灰边框 + 圆角（Slint 1.17 核心不支持虚线描边，以半透明实线近似"虚灰框"观感）
 - 回答气泡宽度改用 `Text.preferred-width` 精确测量并对齐内容（上限 82%，靠向发言侧）；收窄内边距（28→24px）与最小宽（64→48px）；思考面板固定占宽 82% 不受回答限制
 
-### Changed（历史轮次）
+### Changed
 - UI 逻辑从 `main.rs` 迁入库目标新模块 `src/ui.rs`：`ui::run()` 为 UI 专属接口，`main.rs` 瘦身为纯转发入口；内部拆出 `snapshot_history`/`ensure_client`/`spawn_chat`/`append_assistant` 具名私有函数并补全模块级/条目级文档注释（含线程模型图）
 
 ### Added
