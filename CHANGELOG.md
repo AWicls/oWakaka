@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+### Added
+- OpenAI chat 兼容非流式客户端（`src/ai/client.rs`）：通用 `Client::from_config` + `chat()`，任意提供 `/chat/completions` 的网关可用；非 2xx 返回带状态码与原始响应体的 `ChatError`
+- TOML 配置加载（`src/ai/config.rs`）：`base_url`/`api_key`/`model` 从 `config.local.toml` 读取（不入库），提供 `config.example.toml` 模板
+- chat 响应 DTO 补全 `Choice`；接线 ai 模块链进入编译；真实请求测试 `#[ignore]`，用 `cargo test -- --ignored` 验证
+- 依赖：reqwest、tokio、toml
+
 ## [0.1.0] - 2026-09-04
 
 ### Added
