@@ -9,46 +9,26 @@
 
 ## [0.2.0] - 2026-09-05
 
-### Fixed
-- 生成中滚到底部跳回顶部：`viewport-y` 为负值语义（0=顶部、`height-viewport-height`=底部），修正贴底公式符号
-- 思考完成后部分态无法滚动：内嵌 ScrollView 滚轮被外层截获，改为自绘滚动视图（TouchArea `scroll-event` + `accept` 消费滚轮），并支持贴底哨兵（滚回底部自动恢复跟随新内容）
-- "部分"态思考块从固定 3 行改为**最多 5 行、随内容自适应高度**
-- 思考过程收起态内容外泄背景：思考面板改用 ScrollView（原生裁剪）
-
 ### Added
-- 思考过程展示（推理模型 `reasoning_content`/`reasoning` 增量）：client 层 `StreamEvent::{Reasoning, Content}` 事件分流；三态（收起/部分/全开，默认部分），思考完成自动收起、手动切换后固定状态
-- 回答气泡下方最右侧"复制"按钮，经 arboard 写系统剪贴板（Slint 无剪贴板 API，新增依赖 arboard）
-- 自动粘底滚动：新内容与流式增量始终保持可见
+- OpenAI chat 兼容通信层（`src/ai/`）：
+  - 非流式 `Client::chat()`：任意提供 `/chat/completions` 的网关可用；错误分层 `ChatError::{Http, Api, Decode}`，服务端错误与原始响应体不丢
+  - 流式 `Client::chat_stream()`（默认推荐入口）：零新增依赖手写 SSE 行缓冲，`[DONE]`/EOF 双终止，坏行立即 `Decode` 中止；`StreamEvent::{Reasoning, Content}` 分离推理模型思考增量（`reasoning_content`/`reasoning`）与回答增量
+  - 公共兼容 DTO（`dto/openai_chat/`）：请求/响应/SSE 分块（`Chunk`/`ChunkChoice`/`Delta`），`#[serde(flatten)]` 自定义字段平铺透传；`Message.content` 为 `Option<String>` 容纳 tool_calls/纯推理响应
+- 配置体系：`Config`（base_url/api_key/model 三要素，`Debug` 输出对密钥恒脱敏并有 doctest 锁定）+ 通用 TOML 读写工具 `load_toml`/`store_toml`；凭据文件 `config.toml`（正式）与 `config.test.toml`（测试）均不入库，模板 `config.example.toml`
+- Slint 对话壳（`ui/app.slint` + `src/ui.rs`，唯一接口 `ui::run()`）：
+  - 3:2 窗口；微信式左右气泡，回答气泡宽度随内容自适应（上限 82%，靠向发言侧）
+  - 思考过程面板：`Thinking……` 按钮三态（收起 / 部分 ≤5 行随内容自适应 / 全开），流式贴底自动跟随，思考完成自动收起，手动切换后状态固定
+  - 消息列表自动粘底：流式增量保持可见，滚离底部暂停跟随、回到底部恢复
+  - 独立多行输入区：高度随内容自适应（上限 8 行后内部滚动），Ctrl+Enter 发送、Enter 换行，发送按钮位于输入区右下
+  - 回答一键复制（arboard 系统剪贴板）；网络错误与配置缺失以内联气泡反馈且不阻塞 UI
+  - 线程模型：tokio 后台网络任务 + mpsc 回传 + Slint Timer 30ms 主线程刷新
+- 测试与文档：ai/ui 模块链完整 `//!`/`///` 文档注释（含线程模型图）；离线单测 `sse_line_dispatch`（SSE 六类行分发）+ 5 个可离线运行 doctest；真实网关测试标 `#[ignore]`，`cargo test -- --ignored` 手动验证
+- 构建与依赖：`build.rs`（slint-build）；reqwest、tokio、toml、slint、arboard
 
 ### Changed
-- 输入区改为微信式独立区域（`InputArea` 组件）：多行 `TextEdit` 高度随内容自适应、上限 8 行后内部滚动；发送按钮移到输入框底部右侧；快捷键改为 **Ctrl+Enter 发送**（Enter 恢复换行）；修复单行 LineEdit 遇长文本被撑大的问题
-- 思考入口改为回答气泡上方左侧的 `Thinking……` 小按钮（原整卡可点）
-- 思考面板样式：透明灰底 + 半透明细灰边框 + 圆角（Slint 1.17 核心不支持虚线描边，以半透明实线近似"虚灰框"观感）
-- 回答气泡宽度改用 `Text.preferred-width` 精确测量并对齐内容（上限 82%，靠向发言侧）；收窄内边距（28→24px）与最小宽（64→48px）；思考面板固定占宽 82% 不受回答限制
-
-### Changed
-- UI 逻辑从 `main.rs` 迁入库目标新模块 `src/ui.rs`：`ui::run()` 为 UI 专属接口，`main.rs` 瘦身为纯转发入口；内部拆出 `snapshot_history`/`ensure_client`/`spawn_chat`/`append_assistant` 具名私有函数并补全模块级/条目级文档注释（含线程模型图）
-
-### Added
-- P0 对话壳（Slint，`ui/app.slint` + `src/ui.rs`）：3:2 窗口、左右聊天气泡（用户蓝/助手灰）、底部输入框+发送按钮；流式增量逐字入气泡（默认路径），网络错误与配置缺失以内联气泡反馈且不阻塞 UI；tokio 后台任务 + mpsc + Slint Timer 30ms 轮询刷新
-- 构建脚本 `build.rs` 与依赖 slint / slint-build
-- 流式对话 `Client::chat_stream`（SSE，**默认推荐入口**）：请求体注入 `stream: true`，逐段回调文本增量，`data: [DONE]` 或 EOF 结束；坏 `data:` 行报 `ChatError::Decode` 立即中止；零新增依赖（复用 reqwest 核心 chunk API）
-- 流式分块 DTO（`dto/openai_chat/chunk.rs`）：`Chunk`/`ChunkChoice`/`Delta`，容忍 delta 缺省 role/content、末块仅 finish_reason，附解析 doctest
-- 离线单测 `sse_line_dispatch`：验证注释行/心跳/非 data 字段/增量/哨兵/坏 JSON 六类行分发规则
-- ai 模块链完整文档注释（`//!` 模块级 + `///` 条目/字段级），含 4 个可离线运行的文档测试：配置加载、请求 extra 平铺序列化、响应未知字段收集、客户端构造
-- OpenAI chat 兼容非流式客户端（`src/ai/client.rs`）：通用 `Client::from_config` + `chat()`，任意提供 `/chat/completions` 的网关可用；非 2xx 返回带状态码与原始响应体的 `ChatError`
-- TOML 配置加载（`src/ai/config.rs`）：`base_url`/`api_key`/`model` 三要素，模板 `config.example.toml` 入库；`Config::load()` 供正式代码读取 `config.toml`
-- chat 响应 DTO 补全 `Choice`；接线 ai 模块链进入编译；真实请求测试 `#[ignore]`，用 `cargo test -- --ignored` 验证
-- 依赖：reqwest、tokio、toml
-
-### Fixed（五轴质量评审修复轮）
-- `Config` 改为手动 `Debug` impl 恒脱敏 `api_key`（防 `{:?}`/日志泄漏），并新增 doctest 断言锁定该行为
-- chat DTO 健壮性：`Response.choices` 加 `#[serde(default)]` 容忍 content_filter 场景空数组；`Message.content` 改为 `Option<String>` 以容纳 tool_calls/纯推理响应的 `content: null`（否则整个响应解析失败）
-- 新增 `ChatError::Decode`：2xx 但响应体非合法 JSON 时携带解析错误与原始响应体，不再退化为难排查的传输错误
-- lib 目标更名 `o_wakaka`（crate snake_case 规范）、`openai_response` 占位 `input`→`Input`；`cargo fmt`/`cargo clippy --all-targets` 达成零警告
-
-### Changed
-- 通用 TOML 配置读写工具（`load_toml`/`store_toml`，任意 serde 类型可用）取代 `Config::from_file`；文档测试改为在系统临时目录自造配置做读写往返，不再依赖本地 `config.test.toml`（该文件现仅供 `#[ignore]` 真实凭据测试）
+- crate 拆分为 lib（`src/lib.rs`，目标名 `o_wakaka` 符合 snake_case）+ 薄 bin，使 `///` 文档测试可被 `cargo test` 执行
+- UI 逻辑从 `main.rs` 收口至库模块 `src/ui.rs`，`main.rs` 瘦化为纯转发入口
+- 流式分块 DTO 独立建模（`Delta` 与请求侧 `Message` 不同构），容忍厂家增量差异
 
 ## [0.1.0] - 2026-09-04
 
