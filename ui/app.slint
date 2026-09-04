@@ -2,7 +2,7 @@
 // 助手气泡含思考过程三态展示（收起/部分/全开）。
 // 当前为硬编码深色配色，浅色/深色自适应后续增量处理。
 
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, ScrollView, TextEdit } from "std-widgets.slint";
 
 /// 一条聊天消息（气泡数据源）
 export struct ChatMessage {
@@ -142,6 +142,68 @@ component Bubble inherits Rectangle {
         : (thinking-open ? think-frame.y + think-frame.height : think-btn.y + think-btn.height) + 12px;
 }
 
+/// 输入区（微信式）：多行编辑器 + 右下角发送按钮，独立于聊天滚动区。
+/// 高度随内容自适应，上限 8 行（约 152px），超出后内部滚动。
+component InputArea inherits Rectangle {
+    in property <bool> busy;
+    callback send-submit(string);
+
+    height: ed.height + btn-row.height + 16px;
+
+    // 镜像测量文本：与编辑器同宽同字号，其 height 即内容总高。
+    // （TextEdit 的 viewport-height 与自身 height 内置互绑，外部读取会成环，不能用作测量）
+    ed-measure := Text {
+        text: ed.text;
+        font-size: 14px;
+        width: ed.width - 16px; // 扣除编辑器内边距，近似换行宽度
+        x: 0px;
+        y: -100000px;
+        wrap: word-wrap;
+    }
+
+    ed := TextEdit {
+        x: 8px;
+        y: 8px;
+        width: parent.width - 16px;
+        font-size: 14px;
+        // 高度随内容自适应：约 1 行起步，上限 8 行（168px），超出后编辑器内部滚动
+        height: min(max(ed-measure.height + 16px, 40px), 168px);
+        placeholder-text: "输入消息，Ctrl+Enter 发送（Enter 换行）";
+        enabled: !root.busy;
+        // 先于编辑器处理按键：Ctrl+Enter 发送并吞掉；普通 Enter 放行 → 换行
+        key-pressed(ev) => {
+            if (ev.text == "\n" && ev.modifiers.control) {
+                if (!root.busy && self.text != "") {
+                    root.send-submit(self.text);
+                    self.text = "";
+                }
+                accept;
+            }
+            reject;
+        }
+    }
+
+    btn-row := HorizontalLayout {
+        x: 8px;
+        y: ed.y + ed.height + 2px;
+        width: parent.width - 16px;
+        // 显式高度：游离 layout 默认高度=parent.height，会构成绑定环
+        height: 28px;
+        // 左侧弹性占位，按钮贴右下
+        Rectangle { }
+        Button {
+            width: 132px;
+            height: 28px;
+            text: root.busy ? "生成中…" : "发送 (Ctrl+Enter)";
+            enabled: !root.busy && ed.text != "";
+            clicked => {
+                root.send-submit(ed.text);
+                ed.text = "";
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "oWakaka";
     background: #17181c;
@@ -191,23 +253,10 @@ export component AppWindow inherits Window {
             }
         }
 
-        HorizontalLayout {
-            input := LineEdit {
-                placeholder-text: "输入消息，Enter 发送";
-                enabled: !root.busy;
-                accepted => {
-                    root.send(self.text);
-                    self.text = "";
-                }
-            }
-            Button {
-                text: root.busy ? "生成中…" : "发送";
-                enabled: !root.busy && input.text != "";
-                clicked => {
-                    root.send(input.text);
-                    input.text = "";
-                }
-            }
+        // —— 独立输入区：与聊天区分隔，按钮在输入框底部右侧 ——
+        InputArea {
+            busy: root.busy;
+            send-submit(text) => { root.send(text); }
         }
     }
 }
