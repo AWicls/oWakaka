@@ -42,21 +42,47 @@ component Bubble inherits Rectangle {
         }
     }
 
-    // —— 思考内容面板：部分态 3 行高可滚动，全开态完整展示 ——
-    think-panel := ScrollView {
+    // —— 思考内容面板：透明灰底 + 灰色虚线框；部分态 3 行高可滚动，全开态完整展示 ——
+    think-frame := Rectangle {
         visible: root.thinking-open;
         x: 16px;
-        y: think-btn.y + think-btn.height + 2px;
+        y: think-btn.y + think-btn.height + 4px;
         width: root.width * 0.82;
-        height: root.msg.tstate == 1 ? 54px : think-text.height + 4px;
-        // 粘底跟随最新增量；内容不变时滚轮写入 viewport-y 不被覆盖，可手动回看
-        viewport-y: self.viewport-height - self.height;
-        think-text := Text {
-            width: parent.width - 8px;
-            text: root.msg.thinking;
-            wrap: word-wrap;
-            color: #b8bec8;
-            font-size: 13px;
+        height: (root.msg.tstate == 1 ? 54px : think-text.height) + 12px;
+        background: #ffffff0a;
+        // Slint 1.17 核心无虚线描边能力：半透明实线灰框 + 透明灰底达成"虚灰框"观感
+        border-width: 1px;
+        border-color: #6b728099;
+        border-radius: 8px;
+        clip: true;
+
+        ScrollView {
+            x: 6px;
+            y: 6px;
+            width: parent.width - 12px;
+            height: root.msg.tstate == 1 ? 54px : think-text.height;
+            // 粘底状态机：内容增长仅当 stick 时贴底；用户滚离即脱离，滚回底部即恢复
+            property <bool> stick: true;
+            changed viewport-y => {
+                self.stick = self.viewport-y <= self.viewport-height - self.height + 2px;
+            }
+            changed viewport-height => {
+                if (self.stick) {
+                    self.viewport-y = self.viewport-height - self.height;
+                }
+            }
+            changed height => {
+                if (self.stick) {
+                    self.viewport-y = self.viewport-height - self.height;
+                }
+            }
+            think-text := Text {
+                width: parent.width - 8px;
+                text: root.msg.thinking;
+                wrap: word-wrap;
+                color: #b8bec8;
+                font-size: 13px;
+            }
         }
     }
 
@@ -66,7 +92,7 @@ component Bubble inherits Rectangle {
         visible: root.has-answer;
         width: min(max(msg-text.preferred-width + 24px, 48px), root.width * 0.82);
         x: is-user ? root.width - self.width - 16px : 16px;
-        y: thinking-open ? think-panel.y + think-panel.height + 4px
+        y: thinking-open ? think-frame.y + think-frame.height + 4px
             : has-thinking ? think-btn.y + think-btn.height + 4px
             : 6px;
         border-radius: 14px;
@@ -104,7 +130,7 @@ component Bubble inherits Rectangle {
 
     height: root.has-answer
         ? answer.y + answer.height + (copy-btn.visible ? copy-btn.height + 4px : 12px)
-        : (thinking-open ? think-panel.y + think-panel.height : think-btn.y + think-btn.height) + 12px;
+        : (thinking-open ? think-frame.y + think-frame.height : think-btn.y + think-btn.height) + 12px;
 }
 
 export component AppWindow inherits Window {
@@ -126,9 +152,22 @@ export component AppWindow inherits Window {
         spacing: 8px;
 
         ScrollView {
-            // 粘底滚动：视口始终贴内容底部，新消息/流式增量自动可见。
-            // （代价：流式期间手动上滑会被拉回，P0 可接受）
-            viewport-y: self.viewport-height - self.height;
+            // 粘底状态机（与思考面板同模式）：
+            // 内容增长/视口变化时仅当 stick 才贴底；用户滚离底部即脱离，滚回底部自动恢复
+            property <bool> stick: true;
+            changed viewport-y => {
+                self.stick = self.viewport-y <= self.viewport-height - self.height + 2px;
+            }
+            changed viewport-height => {
+                if (self.stick) {
+                    self.viewport-y = self.viewport-height - self.height;
+                }
+            }
+            changed height => {
+                if (self.stick) {
+                    self.viewport-y = self.viewport-height - self.height;
+                }
+            }
             VerticalLayout {
                 for m in root.messages: Bubble {
                     msg: m;
