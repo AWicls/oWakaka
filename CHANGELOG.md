@@ -8,6 +8,8 @@
 ## [Unreleased]
 
 ### Added
+- P0 对话壳（Slint，`ui/app.slint` + `src/main.rs`）：3:2 窗口、左右聊天气泡（用户蓝/助手灰）、底部输入框+发送按钮；流式增量逐字入气泡（默认路径），网络错误与配置缺失以内联气泡反馈且不阻塞 UI；tokio 后台任务 + mpsc + Slint Timer 30ms 轮询刷新
+- 构建脚本 `build.rs` 与依赖 slint / slint-build
 - 流式对话 `Client::chat_stream`（SSE，**默认推荐入口**）：请求体注入 `stream: true`，逐段回调文本增量，`data: [DONE]` 或 EOF 结束；坏 `data:` 行报 `ChatError::Decode` 立即中止；零新增依赖（复用 reqwest 核心 chunk API）
 - 流式分块 DTO（`dto/openai_chat/chunk.rs`）：`Chunk`/`ChunkChoice`/`Delta`，容忍 delta 缺省 role/content、末块仅 finish_reason，附解析 doctest
 - 离线单测 `sse_line_dispatch`：验证注释行/心跳/非 data 字段/增量/哨兵/坏 JSON 六类行分发规则

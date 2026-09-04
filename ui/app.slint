@@ -1,0 +1,84 @@
+// oWakaka P0 对话壳：3:2 窗口，消息聊天气泡流，底部输入框 + 发送按钮。
+// 当前为硬编码深色配色，浅色/深色自适应后续增量处理。
+
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+/// 一条聊天消息（气泡数据源）
+export struct ChatMessage {
+    role: string, // "user" | "assistant"
+    text: string,
+}
+
+/// 单个气泡：user 右侧蓝色，assistant 左侧深灰；宽度固定比例，高度随换行文本
+component Bubble inherits Rectangle {
+    in property <ChatMessage> msg;
+    // 宽度由所在 VerticalLayout 拉伸决定，根元素内不可用 parent
+    height: card.height + 12px;
+
+    card := Rectangle {
+        property <bool> is-user: root.msg.role == "user";
+        width: parent.width * 0.72;
+        x: is-user ? parent.width - self.width - 16px : 16px;
+        y: 6px;
+        border-radius: 14px;
+        background: is-user ? #2f6fed : #2c2e35;
+        height: msg-text.height + 16px;
+
+        // 定宽换行 Text：height 由宽度算出，反向撑起 card，无绑定环
+        msg-text := Text {
+            x: 14px;
+            y: 8px;
+            width: parent.width - 28px;
+            text: root.msg.text;
+            wrap: word-wrap;
+            color: #f3f4f6;
+            horizontal-alignment: is-user ? right : left;
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "oWakaka";
+    background: #17181c;
+    // 3:2 方框
+    preferred-width: 960px;
+    preferred-height: 640px;
+    min-width: 420px;
+    min-height: 320px;
+
+    in property <[ChatMessage]> messages;
+    in property <bool> busy;
+    callback send(string);
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 8px;
+
+        ScrollView {
+            VerticalLayout {
+                for m in root.messages: Bubble {
+                    msg: m;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            input := LineEdit {
+                placeholder-text: "输入消息，Enter 发送";
+                enabled: !root.busy;
+                accepted => {
+                    root.send(self.text);
+                    self.text = "";
+                }
+            }
+            Button {
+                text: root.busy ? "生成中…" : "发送";
+                enabled: !root.busy && input.text != "";
+                clicked => {
+                    root.send(input.text);
+                    input.text = "";
+                }
+            }
+        }
+    }
+}
