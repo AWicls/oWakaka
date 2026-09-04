@@ -1,5 +1,8 @@
 //! 运行配置：从 TOML 文件加载 LLM 端点凭据。
-//! 凭据文件 `config.local.toml` 已被 git 忽略，模板见项目根 `config.example.toml`。
+//!
+//! 文件约定（两者均含密钥，已被 git 忽略，模板见项目根 `config.example.toml`）：
+//! - `config.toml`：正式代码使用，经 [`Config::load`] 读取
+//! - `config.test.toml`：测试（含文档测试）使用
 
 use std::{error::Error, fs, path::Path};
 
@@ -20,17 +23,20 @@ pub struct Config {
 }
 
 impl Config {
-    /// 从 TOML 文件加载配置。
+    /// 读取正式配置 `config.toml`（相对于运行时工作目录）。
+    pub fn load() -> Result<Self, Box<dyn Error>> {
+        Self::from_file("config.toml")
+    }
+
+    /// 从指定 TOML 文件加载配置。
     ///
-    /// 示例直接读仓库内的模板文件，可离线运行：
+    /// 本地约定测试读 `config.test.toml`（缺失时从 `config.example.toml` 复制填写）：
     ///
     /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use oWakaka::ai::config::Config;
-    /// let cfg = Config::from_file("config.example.toml")?;
-    /// assert_eq!(cfg.base_url, "https://api.openai.com/v1");
-    /// # Ok(())
-    /// # }
+    /// let cfg = Config::from_file("config.test.toml")
+    ///     .expect("缺少 config.test.toml，请复制 config.example.toml 并填写");
+    /// assert!(!cfg.base_url.is_empty() && !cfg.api_key.is_empty() && !cfg.model.is_empty());
     /// ```
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let text = fs::read_to_string(path)?;

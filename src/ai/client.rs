@@ -116,13 +116,13 @@ mod tests {
     use super::*;
     use crate::ai::dto::openai_chat::request::Message;
 
-    /// 真实请求测试：先按 config.example.toml 填好 config.local.toml，再运行
+    /// 真实请求测试：凭据填在 config.test.toml（见 config.example.toml 模板），运行
     /// `cargo test -- --ignored`
     #[tokio::test]
-    #[ignore = "需要 config.local.toml 中的真实凭据"]
+    #[ignore = "需要 config.test.toml 中的真实凭据"]
     async fn chat_roundtrip() {
-        let cfg = Config::from_file("config.local.toml")
-            .expect("缺少 config.local.toml，请复制 config.example.toml 并填写");
+        let cfg = Config::from_file("config.test.toml")
+            .expect("缺少 config.test.toml，请复制 config.example.toml 并填写");
         let client = Client::from_config(&cfg);
         let req = Request {
             model: cfg.model.clone(),
