@@ -61,19 +61,19 @@ component Bubble inherits Rectangle {
             y: 6px;
             width: parent.width - 12px;
             height: root.msg.tstate == 1 ? 54px : think-text.height;
-            // 粘底状态机：内容增长仅当 stick 时贴底；用户滚离即脱离，滚回底部即恢复
+            // 粘底状态机（同消息列表）：scrolled 仅用户触发，负值语义
             property <bool> stick: true;
-            changed viewport-y => {
-                self.stick = self.viewport-y <= self.viewport-height - self.height + 2px;
+            scrolled => {
+                self.stick = self.viewport-y <= self.height - self.viewport-height + 2px;
             }
             changed viewport-height => {
                 if (self.stick) {
-                    self.viewport-y = self.viewport-height - self.height;
+                    self.viewport-y = self.height - self.viewport-height;
                 }
             }
             changed height => {
                 if (self.stick) {
-                    self.viewport-y = self.viewport-height - self.height;
+                    self.viewport-y = self.height - self.viewport-height;
                 }
             }
             think-text := Text {
@@ -152,20 +152,21 @@ export component AppWindow inherits Window {
         spacing: 8px;
 
         ScrollView {
-            // 粘底状态机（与思考面板同模式）：
-            // 内容增长/视口变化时仅当 stick 才贴底；用户滚离底部即脱离，滚回底部自动恢复
+            // 粘底状态机：viewport-y 为负值语义（0=顶部，height-viewport-height=底部）。
+            // scrolled() 仅在用户滚动时触发：滚离底部即脱离粘底，滚回底部自动恢复；
+            // 内容变化时仅当粘底才贴底。
             property <bool> stick: true;
-            changed viewport-y => {
-                self.stick = self.viewport-y <= self.viewport-height - self.height + 2px;
+            scrolled => {
+                self.stick = self.viewport-y <= self.height - self.viewport-height + 2px;
             }
             changed viewport-height => {
                 if (self.stick) {
-                    self.viewport-y = self.viewport-height - self.height;
+                    self.viewport-y = self.height - self.viewport-height;
                 }
             }
             changed height => {
                 if (self.stick) {
-                    self.viewport-y = self.viewport-height - self.height;
+                    self.viewport-y = self.height - self.viewport-height;
                 }
             }
             VerticalLayout {
