@@ -12,7 +12,7 @@ use serde::Deserialize;
 ///
 /// `base_url` 可指向任何实现 `/chat/completions` 的网关，
 /// 三要素之外暂不收其他配置（YAGNI，出现真实需求再加）。
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct Config {
     /// API 根地址，如 `https://api.openai.com/v1`（末尾斜杠可选，客户端会归一化）
     pub base_url: String,
@@ -20,6 +20,17 @@ pub struct Config {
     pub api_key: String,
     /// 默认模型名，随请求体 `model` 字段发送
     pub model: String,
+}
+
+/// 手动实现：`api_key` 恒为脱敏占位，防止 `{:?}`/日志/panic 输出泄漏密钥。
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 impl Config {
@@ -33,10 +44,12 @@ impl Config {
     /// 本地约定测试读 `config.test.toml`（缺失时从 `config.example.toml` 复制填写）：
     ///
     /// ```
-    /// use oWakaka::ai::config::Config;
+    /// use o_wakaka::ai::config::Config;
     /// let cfg = Config::from_file("config.test.toml")
     ///     .expect("缺少 config.test.toml，请复制 config.example.toml 并填写");
     /// assert!(!cfg.base_url.is_empty() && !cfg.api_key.is_empty() && !cfg.model.is_empty());
+    /// // Debug 输出必须脱敏（防止日志泄漏密钥）
+    /// assert!(!format!("{cfg:?}").contains(&cfg.api_key));
     /// ```
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let text = fs::read_to_string(path)?;

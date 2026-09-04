@@ -14,6 +14,12 @@
 - chat 响应 DTO 补全 `Choice`；接线 ai 模块链进入编译；真实请求测试 `#[ignore]`，用 `cargo test -- --ignored` 验证
 - 依赖：reqwest、tokio、toml
 
+### Fixed（五轴质量评审修复轮）
+- `Config` 改为手动 `Debug` impl 恒脱敏 `api_key`（防 `{:?}`/日志泄漏），并新增 doctest 断言锁定该行为
+- chat DTO 健壮性：`Response.choices` 加 `#[serde(default)]` 容忍 content_filter 场景空数组；`Message.content` 改为 `Option<String>` 以容纳 tool_calls/纯推理响应的 `content: null`（否则整个响应解析失败）
+- 新增 `ChatError::Decode`：2xx 但响应体非合法 JSON 时携带解析错误与原始响应体，不再退化为难排查的传输错误
+- lib 目标更名 `o_wakaka`（crate snake_case 规范）、`openai_response` 占位 `input`→`Input`；`cargo fmt`/`cargo clippy --all-targets` 达成零警告
+
 ## [0.1.0] - 2026-09-04
 
 ### Added

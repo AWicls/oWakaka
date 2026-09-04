@@ -10,17 +10,26 @@ use super::request::Message;
 /// 其余字段自动收集进 `extra`，不做二次解析：
 ///
 /// ```
-/// use oWakaka::ai::dto::openai_chat::response::Response;
+/// use o_wakaka::ai::dto::openai_chat::response::Response;
 ///
 /// let raw = r#"{"id":"chatcmpl-9","created":1,"choices":[
 ///     {"index":0,"message":{"role":"assistant","content":"2"}}]}"#;
 /// let resp: Response = serde_json::from_str(raw).unwrap();
-/// assert_eq!(resp.choices[0].message.content, "2");
+/// assert_eq!(resp.choices[0].message.content.as_deref(), Some("2"));
 /// assert_eq!(resp.extra.unwrap()["id"], "chatcmpl-9");
+///
+/// // tool_calls/纯推理消息的 content 为 null，必须可解析
+/// let tool: Response = serde_json::from_str(
+///     r#"{"choices":[{"message":{"role":"assistant","content":null}}]}"#,
+/// )
+/// .unwrap();
+/// assert_eq!(tool.choices[0].message.content, None);
 /// ```
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
-    /// 候选回复列表，常规对话取第一个即可
+    /// 候选回复列表，常规对话取第一个即可。
+    /// `default` 容忍 content_filter/moderation 场景返回的空 `choices`
+    #[serde(default)]
     pub choices: Vec<Choice>,
     /// 未声明字段的平铺收集（id、created、usage 等）
     #[serde(flatten)]
