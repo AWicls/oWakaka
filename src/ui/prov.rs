@@ -401,14 +401,12 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
             runtime.spawn(async move {
                 let t = std::time::Instant::now();
                 let msg = match client.list_models().await {
-                    Ok(ids) => format!(
-                        "✓ 连通：{} 个模型，{} ms",
-                        ids.len(),
-                        t.elapsed().as_millis()
-                    ),
+                    Ok(ids) => {
+                        format!("连通：{} 个模型，{} ms", ids.len(), t.elapsed().as_millis())
+                    }
                     Err(e) => {
                         let brief: String = e.to_string().chars().take(160).collect();
-                        format!("✕ 连接失败: {brief}")
+                        format!("连接失败：{brief}")
                     }
                 };
                 let _ = tx.send(super::UiMsg::ProvTest(msg.into()));

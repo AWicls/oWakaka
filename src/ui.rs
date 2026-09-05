@@ -344,7 +344,7 @@ fn wire_timer(window: &AppWindow, ctx: &Ctx, rx: mpsc::Receiver<UiMsg>) {
                 UiMsg::ProvFetch(Err(e)) => {
                     window.set_remote_loading(false);
                     let brief: String = e.chars().take(160).collect();
-                    window.set_prov_status(format!("✕ 拉取失败: {brief}").into());
+                    window.set_prov_status(format!("拉取失败：{brief}").into());
                     continue;
                 }
             };
