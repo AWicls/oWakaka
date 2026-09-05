@@ -2,7 +2,7 @@
 //（含左下角主题切换按钮与弹出菜单）。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icon } from "theme.slint";
+import { Theme, Icon, OptionRow } from "theme.slint";
 
 /// 侧栏一行数据源：会话标题 + 是否选中。
 export struct SessionItem {
@@ -55,54 +55,6 @@ component SessionRow inherits Rectangle {
             y: (parent.height - self.height) / 2;
             which: 11;
             ink: Theme.p.textMuted;
-        }
-    }
-}
-
-/// 主题弹层的一行：图标 + 文案 + 选中态对勾。
-component ThemeOption inherits Rectangle {
-    in property <int> icon;
-    in property <string> label;
-    in property <bool> selected;
-    callback picked();
-
-    height: 34px;
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-    Rectangle {
-        x: 3px;
-        y: 2px;
-        width: parent.width - 6px;
-        height: parent.height - 4px;
-        border-radius: 7px;
-        background: ta.has-hover ? Theme.p.listHover : transparent;
-        Icon {
-            x: 9px;
-            y: (parent.height - self.height) / 2;
-            width: 16px;
-            height: 16px;
-            which: root.icon;
-            ink: root.selected ? Theme.p.link : Theme.p.textSecondary;
-        }
-        Text {
-            x: 33px;
-            y: (parent.height - self.height) / 2;
-            text: root.label;
-            color: Theme.p.textPrimary;
-            font-size: 13px;
-        }
-        Icon {
-            visible: root.selected;
-            width: 14px;
-            height: 14px;
-            x: parent.width - self.width - 10px;
-            y: (parent.height - self.height) / 2;
-            which: 3; // 对勾
-            ink: Theme.p.link;
         }
     }
 }
@@ -265,7 +217,8 @@ export component SessionSidebar inherits Rectangle {
         VerticalLayout {
             padding: 6px;
             spacing: 0;
-            ThemeOption {
+            OptionRow {
+                row-height: 34px;
                 icon: 0;
                 label: "浅色";
                 selected: Theme.mode == 0;
@@ -274,7 +227,8 @@ export component SessionSidebar inherits Rectangle {
                     root.menu-open = false;
                 }
             }
-            ThemeOption {
+            OptionRow {
+                row-height: 34px;
                 icon: 1;
                 label: "深色";
                 selected: Theme.mode == 1;
@@ -283,7 +237,8 @@ export component SessionSidebar inherits Rectangle {
                     root.menu-open = false;
                 }
             }
-            ThemeOption {
+            OptionRow {
+                row-height: 34px;
                 icon: 2;
                 label: "跟随系统";
                 selected: Theme.mode == 2;

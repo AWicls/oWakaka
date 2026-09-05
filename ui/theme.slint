@@ -262,3 +262,55 @@ export component Card inherits Rectangle {
     border-color: Theme.p.panelBorder;
     clip: true;
 }
+
+/// 菜单/弹层通用选择行：可选左图标 + 标签（省略号）+ 选中态右对勾 + 悬停高亮。
+/// 会话栏主题菜单（带左图标、row-height 34）与输入区模型下拉（无图标、默认 30）共用；
+/// 左图标与对勾均 `if` 条件实例化，未用时不进渲染树。
+export component OptionRow inherits Rectangle {
+    in property <int> icon: -1; // -1 = 无左图标
+    in property <string> label;
+    in property <bool> selected;
+    in property <length> row-height: 30px;
+    callback picked();
+
+    height: root.row-height;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    Rectangle {
+        x: 3px;
+        y: 2px;
+        width: parent.width - 6px;
+        height: parent.height - 4px;
+        border-radius: 7px;
+        background: ta.has-hover ? Theme.p.listHover : transparent;
+        if root.icon >= 0 : Icon {
+            x: 9px;
+            y: (parent.height - self.height) / 2;
+            width: 16px;
+            height: 16px;
+            which: root.icon;
+            ink: root.selected ? Theme.p.link : Theme.p.textSecondary;
+        }
+        Text {
+            x: root.icon >= 0 ? 33px : 10px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width - 44px;
+            text: root.label;
+            color: Theme.p.textPrimary;
+            font-size: 13px;
+            overflow: elide;
+        }
+        if root.selected : Icon {
+            width: 14px;
+            height: 14px;
+            x: parent.width - self.width - 10px;
+            y: (parent.height - self.height) / 2;
+            which: 3; // 对勾
+            ink: Theme.p.link;
+        }
+    }
+}
