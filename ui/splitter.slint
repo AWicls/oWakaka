@@ -1,0 +1,75 @@
+// 可拖拽分隔条：VSplitter（改左栏宽）/ HSplitter（改输入区高）。
+// 悬停/拖动时小白条提亮，position 由使用方 min/max 约束。
+
+/// 纵向拖拽条：position = 左栏宽度。按住拖动即改写 position（打断外部初始
+/// 绑定后钉死），悬停/拖动时小白条提亮；取值范围由使用方 min/max 约束。
+export component VSplitter inherits Rectangle {
+    in-out property <length> position;
+    in property <length> min-pos;
+    in property <length> max-pos;
+    property <length> grab: 0px;
+    property <length> start-pos: 0px;
+
+    width: 12px;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: col-resize;
+        // 按下瞬间记录：按下处与当时的 position（moved 仅在按住时触发）
+        changed pressed => {
+            if (self.pressed) {
+                root.grab = self.mouse-x;
+                root.start-pos = root.position;
+            }
+        }
+        moved => {
+            root.position = Math.max(root.min-pos, Math.min(root.max-pos,
+                root.start-pos + self.mouse-x - root.grab));
+        }
+    }
+    Rectangle {
+        width: 3px;
+        height: parent.height * 0.3;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 2px;
+        background: white;
+        opacity: (ta.pressed || ta.has-hover) ? 0.85 : 0.18;
+    }
+}
+
+/// 横向拖拽条：position = 输入区高度；向上拖增高（delta 取负）。
+export component HSplitter inherits Rectangle {
+    in-out property <length> position;
+    in property <length> min-pos;
+    in property <length> max-pos;
+    property <length> grab: 0px;
+    property <length> start-pos: 0px;
+
+    height: 12px;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: row-resize;
+        changed pressed => {
+            if (self.pressed) {
+                root.grab = self.mouse-y;
+                root.start-pos = root.position;
+            }
+        }
+        // position = 输入区高度：向下拖（mouse-y 增大）则减小
+        moved => {
+            root.position = Math.max(root.min-pos, Math.min(root.max-pos,
+                root.start-pos + root.grab - self.mouse-y));
+        }
+    }
+    Rectangle {
+        width: parent.width * 0.25;
+        height: 3px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 2px;
+        background: white;
+        opacity: (ta.pressed || ta.has-hover) ? 0.85 : 0.18;
+    }
+}

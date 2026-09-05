@@ -1,0 +1,93 @@
+// 左侧会话栏：SessionItem 数据源 + SessionRow 行 + SessionSidebar 卡片。
+
+import { ScrollView } from "std-widgets.slint";
+
+/// 侧栏一行数据源：会话标题 + 是否选中。
+export struct SessionItem {
+    title: string,
+    active: bool,
+}
+
+/// 侧栏列表的一行：圆角条，选中/悬停高亮，超长标题省略号。
+component SessionRow inherits Rectangle {
+    in property <string> title;
+    in property <bool> active;
+    callback row-clicked();
+
+    height: 38px;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.row-clicked(); }
+    }
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: 9px;
+        background: root.active ? #2f6fed3d : (ta.has-hover ? #ffffff12 : transparent);
+        Text {
+            x: 10px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width - 20px;
+            text: root.title;
+            color: root.active ? #e6e9ef : #aeb4bf;
+            font-size: 13px;
+            overflow: elide;
+        }
+    }
+}
+
+/// 左侧会话栏卡片：顶部「开始新对话」，下方会话列表可滚动。
+export component SessionSidebar inherits Rectangle {
+    in property <[SessionItem]> sessions;
+    callback new-clicked();
+    callback row-clicked(int);
+
+    background: #1e2026;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: #ffffff14;
+    clip: true;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        new-btn := Rectangle {
+            height: 36px;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #ffffff26;
+            background: nt.has-hover ? #ffffff1a : #ffffff0d;
+            nt := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                mouse-cursor: pointer;
+                clicked => { root.new-clicked(); }
+            }
+            Text {
+                width: parent.width;
+                y: (parent.height - self.height) / 2;
+                text: "+ 开始新对话";
+                color: #d7dade;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 2px;
+                for s[index] in root.sessions: SessionRow {
+                    title: s.title;
+                    active: s.active;
+                    row-clicked => { root.row-clicked(index); }
+                }
+            }
+        }
+    }
+}

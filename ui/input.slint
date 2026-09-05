@@ -1,0 +1,123 @@
+// 输入区卡片：无框自绘编辑器（ScrollView + TextInput）+ Thinking/发送停止按钮行。
+
+import { Button, ScrollView } from "std-widgets.slint";
+
+/// 输入区卡片：总高由外层拖拽条（HSplitter.position）控制。
+/// 编辑器为自绘无框区（std ScrollView + 原生 TextInput）：fluent 内置 TextEdit 的
+/// 白底+边框写死在样式内部不可覆盖（widgets/fluent/textedit.slint 实证），故绕开。
+/// 编辑区与按钮行之间只隔一段透明间距，不再有任何边框线。
+export component InputArea inherits Rectangle {
+    in property <bool> generating; // 当前会话是否正在生成（决定发送键=停止键）
+    in property <bool> thinking-on;
+    callback send-submit(string);
+    callback stop-request();
+    callback thinking-toggled();
+
+    background: #1e2026;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: #ffffff14;
+
+    ed-area := ScrollView {
+        x: 12px;
+        y: 10px;
+        width: parent.width - 24px;
+        // 10 上 + 编辑区 + 12 透明分隔 + 28 按钮行 + 10 下；下限防塌陷
+        height: Math.max(24px, root.height - 10px - 12px - 28px - 10px);
+        viewport-width: self.visible-width;
+        viewport-height: Math.max(self.visible-height, ti.preferred-height);
+
+        // 裸编辑面：零装饰，背景即卡片色；光标跟随滚动逻辑与官方 TextEditBase 同款
+        ti := TextInput {
+            single-line: false;
+            wrap: word-wrap;
+            font-size: 14px;
+            color: #f3f4f6;
+            page-height: ed-area.visible-height;
+            // 先于内置编辑处理按键：Ctrl+Enter 发送并吞掉；普通 Enter 放行 → 换行。
+            // 生成中/空文本也吞掉组合键，避免插入多余换行
+            key-pressed(ev) => {
+                if (ev.text == "\n" && ev.modifiers.control) {
+                    if (!root.generating && self.text != "") {
+                        root.send-submit(self.text);
+                        self.text = "";
+                    }
+                    accept;
+                } else {
+                    reject;
+                }
+            }
+            cursor-position-changed(cpos) => {
+                if (cpos.y + ed-area.viewport-y < 0px) {
+                    ed-area.viewport-y = Math.min(0px,
+                        Math.max(ed-area.visible-height - self.height, -cpos.y));
+                } else if (cpos.y + ed-area.viewport-y > ed-area.visible-height - 20px) {
+                    ed-area.viewport-y = Math.min(0px,
+                        Math.max(ed-area.visible-height - self.height,
+                            ed-area.visible-height - cpos.y - 20px));
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: ed-area.x;
+        y: ed-area.y;
+        width: ed-area.width;
+        height: 20px;
+        Text {
+            text: ti.text == "" ? "输入消息，Ctrl+Enter 发送（Enter 换行）" : "";
+            color: #6b7280;
+            font-size: 14px;
+            vertical-alignment: top;
+        }
+    }
+
+    btn-row := HorizontalLayout {
+        x: 12px;
+        y: root.height - 28px - 10px;
+        width: parent.width - 24px;
+        // 显式高度：游离 layout 默认高度=parent.height，会构成绑定环
+        height: 28px;
+        spacing: 8px;
+
+        // Thinking 开关：默认开；开启态蓝色强调
+        Rectangle {
+            width: th-lbl.preferred-width + 20px;
+            height: 28px;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: root.thinking-on ? #2f6fed66 : #ffffff26;
+            background: root.thinking-on ? #2f6fed26 : (th-ta.has-hover ? #ffffff1a : #ffffff0d);
+            th-ta := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                mouse-cursor: pointer;
+                clicked => { root.thinking-toggled(); }
+            }
+            th-lbl := Text {
+                x: 10px;
+                y: (parent.height - self.height) / 2;
+                text: root.thinking-on ? "● Thinking" : "○ Thinking";
+                color: root.thinking-on ? #9db9ff : #8f96a3;
+                font-size: 13px;
+            }
+        }
+        // 弹性占位，发送/停止按钮贴右下
+        Rectangle { }
+        Button {
+            width: 132px;
+            height: 28px;
+            text: root.generating ? "■ 停止" : "发送 (Ctrl+Enter)";
+            enabled: root.generating || ti.text != "";
+            clicked => {
+                if (root.generating) {
+                    root.stop-request();
+                } else {
+                    root.send-submit(ti.text);
+                    ti.text = "";
+                }
+            }
+        }
+    }
+}
