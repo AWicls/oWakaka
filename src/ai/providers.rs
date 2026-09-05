@@ -166,6 +166,26 @@ impl Providers {
         self.list.iter().find(|p| p.id == id)
     }
 
+    /// 未删条目按 id 取可变引用（写路径守卫：已删/不存在回 `None`）。
+    fn live_mut(&mut self, id: &str) -> Option<&mut ProviderEntry> {
+        self.list.iter_mut().find(|p| p.id == id && !p.deleted)
+    }
+
+    /// 置/清某条目的逻辑删除标记（id 不存在则忽略）。
+    fn mark_deleted(&mut self, id: &str, deleted: bool) {
+        if let Some(e) = self.list.iter_mut().find(|p| p.id == id) {
+            e.deleted = deleted;
+        }
+    }
+
+    /// 删除/彻底删除后维护 active：若 active 正指向被处理项，切到下一个未删条目（无则清空）。
+    fn reactivate_if_current(&mut self, id: &str) {
+        if self.active == id {
+            let next = self.live().next().map(|p| p.id.clone());
+            self.active = next.unwrap_or_default();
+        }
+    }
+
     /// 使用中条目（active 指向已删/不存在 = `None`）。
     pub fn active_entry(&self) -> Option<&ProviderEntry> {
         self.find(&self.active).filter(|p| !p.deleted)
@@ -302,7 +322,7 @@ impl Providers {
     /// ```
     pub fn upsert_model(db: &Db, prov_id: &str, m: ModelInfo) -> Result<(), Box<dyn Error>> {
         let mut ps = Self::load(db)?;
-        let Some(e) = ps.list.iter_mut().find(|p| p.id == prov_id && !p.deleted) else {
+        let Some(e) = ps.live_mut(prov_id) else {
             return Err("提供商不存在或已删除".into());
         };
         match e.models.iter_mut().find(|x| x.id == m.id) {
@@ -317,7 +337,7 @@ impl Providers {
     /// 若正删的是全局当前模型则一并清空指针。
     pub fn remove_model(db: &Db, prov_id: &str, model_id: &str) -> Result<(), Box<dyn Error>> {
         let mut ps = Self::load(db)?;
-        let Some(e) = ps.list.iter_mut().find(|p| p.id == prov_id && !p.deleted) else {
+        let Some(e) = ps.live_mut(prov_id) else {
             return Ok(());
         };
         e.models.retain(|m| m.id != model_id);
@@ -330,22 +350,15 @@ impl Providers {
     /// 逻辑删除；删的正是 active 时自动切到下一个未删条目（无则清空指针）。
     pub fn soft_delete(db: &Db, id: &str) -> Result<(), Box<dyn Error>> {
         let mut ps = Self::load(db)?;
-        if let Some(e) = ps.list.iter_mut().find(|p| p.id == id) {
-            e.deleted = true;
-        }
-        let fallback = ps.live().next().map(|p| p.id.clone());
-        if ps.active == id {
-            ps.active = fallback.unwrap_or_default();
-        }
+        ps.mark_deleted(id, true);
+        ps.reactivate_if_current(id);
         ps.store(db)
     }
 
     /// 恢复逻辑删除条目。
     pub fn restore(db: &Db, id: &str) -> Result<(), Box<dyn Error>> {
         let mut ps = Self::load(db)?;
-        if let Some(e) = ps.list.iter_mut().find(|p| p.id == id) {
-            e.deleted = false;
-        }
+        ps.mark_deleted(id, false);
         ps.store(db)
     }
 
@@ -353,10 +366,7 @@ impl Providers {
     pub fn purge(db: &Db, secrets_path: impl AsRef<Path>, id: &str) -> Result<(), Box<dyn Error>> {
         let mut ps = Self::load(db)?;
         ps.list.retain(|p| p.id != id);
-        let fallback = ps.live().next().map(|p| p.id.clone());
-        if ps.active == id {
-            ps.active = fallback.unwrap_or_default();
-        }
+        ps.reactivate_if_current(id);
         ps.store(db)?;
         let mut secrets: Secrets =
             super::config::load_toml(secrets_path.as_ref()).unwrap_or_default();
