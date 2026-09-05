@@ -137,6 +137,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     };
 
     // —— 接线：每页一块；会话核心（发送/停止/回流）留在本文件，页面归各子模块 ——
+    ctx.host.sync_assistant_header(&window); // 启动首屏：当前会话助手进头栏
     frame::wire_frame(&window);
     host::wire_sidebar(&window, &ctx);
     wire_chat(&window, &ctx);

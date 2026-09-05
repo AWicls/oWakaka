@@ -17,6 +17,7 @@ use slint::{ComponentHandle, Model, SharedString, VecModel};
 use crate::ai::client::{TurnEvent, TurnHandle};
 use crate::db::{Db, LoadedMessage, LoadedSession, MessagePayload};
 
+use super::models::ModelsState;
 use super::{AppWindow, ChatMessage, SessionItem, TrashItem};
 
 /// 「哪个会话的哪一轮生成」定位对：回流事件据此写回原会话、并丢弃过期轮次。
@@ -89,8 +90,8 @@ impl Host {
             Vec::new()
         });
         if loaded.is_empty() {
-            let (id, pid) = host.create_session_row(NEW_TITLE);
-            host.adopt(id, pid, NEW_TITLE, Vec::new());
+            let (id, pid, bubbles) = host.create_session_row(NEW_TITLE);
+            host.adopt(id, pid, NEW_TITLE, bubbles);
         } else {
             for s in loaded {
                 let bubbles = s.messages.into_iter().map(bubble_from).collect();
@@ -112,16 +113,11 @@ impl Host {
         host
     }
 
-    /// 插入新会话行并绑定当前默认助手，返回 `(会话 id, 助手 id)`；
-    /// 失败记日志并回 `-1` 占位。
-    fn create_session_row(&self, title: &str) -> (i64, i64) {
-        let pid = self.db.default_assistant().map_or_else(
-            |e| {
-                eprintln!("读取默认助手失败（会话不绑定）: {e}");
-                -1
-            },
-            |a| a.id,
-        );
+    /// 插入新会话行并绑定当前默认助手；开场白非空即持久化为第一条 assistant 消息
+    /// （计入后续请求历史）。返回 `(会话 id, 助手 id, 初始气泡)`；失败记日志回 `-1` 占位。
+    fn create_session_row(&self, title: &str) -> (i64, i64, Vec<ChatMessage>) {
+        let ast = self.db.default_assistant().ok();
+        let pid = ast.as_ref().map_or(-1, |a| a.id);
         let sid = self
             .db
             .insert_session(title, (pid > 0).then_some(pid))
@@ -129,7 +125,65 @@ impl Host {
                 eprintln!("创建会话失败（不持久）: {e}");
                 -1
             });
-        (sid, pid)
+        let mut bubbles = Vec::new();
+        if let Some(a) = ast.filter(|a| !a.opening.trim().is_empty()) {
+            if sid >= 0
+                && let Err(e) = self
+                    .db
+                    .insert_message(sid, "assistant", a.opening.trim(), "", None)
+            {
+                eprintln!("开场白落库失败: {e}");
+            }
+            bubbles.push(ChatMessage {
+                role: "assistant".into(),
+                text: a.opening.trim().into(),
+                thinking: SharedString::default(),
+                tstate: 0,
+                tauto: true,
+            });
+        }
+        (sid, pid, bubbles)
+    }
+
+    /// 当前会话绑定助手 → 聊天卡头栏四属性（未绑定/悬空/已删回落默认助手）。
+    pub(super) fn sync_assistant_header(&self, window: &AppWindow) {
+        let pid = self
+            .persona_ids
+            .borrow()
+            .get(self.current.get())
+            .copied()
+            .unwrap_or(-1);
+        let Some(a) = self
+            .db
+            .assistant(pid)
+            .ok()
+            .flatten()
+            .filter(|a| !a.deleted)
+            .or_else(|| self.db.default_assistant().ok())
+        else {
+            return;
+        };
+        window.set_chat_ast_name(a.name.as_str().into());
+        window.set_chat_ast_initial(super::settings::initial_of(&a.name).as_str().into());
+        window.set_chat_ast_color(super::settings::avatar_color(a.id));
+        window.set_chat_ast_img(super::settings::load_avatar(&a.avatar));
+    }
+
+    /// 当前会话绑定助手若指定默认模型 → 切换激活模型下拉（仅新建会话时调用；
+    /// 未绑定/未指定/已删助手不动，保持用户当前选择）。
+    pub(super) fn apply_assistant_model(&self, models: &ModelsState, window: &AppWindow) {
+        let pid = self
+            .persona_ids
+            .borrow()
+            .get(self.current.get())
+            .copied()
+            .unwrap_or(-1);
+        let Some(a) = self.db.assistant(pid).ok().flatten().filter(|a| !a.deleted) else {
+            return;
+        };
+        if !a.model.is_empty() {
+            models.pick(window, a.model);
+        }
     }
 
     /// 一条会话行并列进五个簿记列表；仅首条自动选中（重启可见性在 new 里另定）。
@@ -172,8 +226,8 @@ impl Host {
                 },
             );
         }
-        let (db_id, pid) = self.create_session_row(NEW_TITLE);
-        let model = Rc::new(VecModel::<ChatMessage>::default());
+        let (db_id, pid, bubbles) = self.create_session_row(NEW_TITLE);
+        let model = Rc::new(VecModel::from(bubbles));
         self.models.borrow_mut().push(model.clone());
         self.runs.borrow_mut().push(RunState {
             gen_id: 0,
@@ -189,6 +243,7 @@ impl Host {
         self.current.set(self.models.borrow().len() - 1);
         window.set_messages(model.into());
         window.set_generating(false);
+        self.sync_assistant_header(window);
     }
 
     /// 删除可见会话（逻辑删 → 回收站）：取消其在途生成、整体 bump 删除点及之后的
@@ -220,8 +275,8 @@ impl Host {
         self.db_ids.borrow_mut().remove(idx);
         self.persona_ids.borrow_mut().remove(idx);
         if self.items.row_count() == 0 {
-            let (id, pid) = self.create_session_row(NEW_TITLE);
-            self.adopt(id, pid, NEW_TITLE, Vec::new());
+            let (id, pid, bubbles) = self.create_session_row(NEW_TITLE);
+            self.adopt(id, pid, NEW_TITLE, bubbles);
             self.current.set(0);
         } else {
             let cur = self.current.get();
@@ -249,6 +304,7 @@ impl Host {
         }
         window.set_messages(self.active_model().into());
         window.set_generating(self.is_generating());
+        self.sync_assistant_header(window);
     }
 
     /// 回收站恢复后把会话（含消息）推入侧栏末尾；不改变当前可见。
@@ -285,6 +341,7 @@ impl Host {
         let model = self.models.borrow()[index].clone();
         window.set_messages(model.into());
         window.set_generating(self.is_generating());
+        self.sync_assistant_header(window);
     }
 
     /// 会话首次发送后，把占位标题换成输入摘要（内存与 DB 同步）。
@@ -408,9 +465,12 @@ pub(super) fn wire_sidebar(window: &AppWindow, ctx: &super::Ctx) {
     let window_weak = window.as_weak();
     window.on_new_session({
         let host = host.clone();
+        let models = ctx.models.clone();
         move || {
             if let Some(w) = window_weak.upgrade() {
                 host.new_session(&w);
+                // 新会话绑定助手指定了默认模型 → 自动切模型下拉（回对话页即可见）
+                host.apply_assistant_model(&models, &w);
             }
         }
     });

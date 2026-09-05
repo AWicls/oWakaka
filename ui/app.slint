@@ -217,6 +217,11 @@ export component AppWindow inherits Window {
     in property <[SessionItem]> sessions;
     in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
     in property <string> model-label; // 当前激活模型显示名
+    // —— 聊天卡头栏：当前会话绑定助手（Rust 切换/新建会话时同步；悬空回落默认助手） ——
+    in property <string> chat-ast-name;
+    in property <string> chat-ast-initial; // 名称首字（无图头像圆底用）
+    in property <color> chat-ast-color;    // 圆底色（按助手 id 哈希）
+    in property <image> chat-ast-img;      // 头像图片（空图 width=0 → 画圆底首字）
     in property <bool> settings-page; // 设置整页开关（true = 显示设置页，主三框整体切换）
     // —— 回收站（会话两级删除的找回入口） ——
     in property <bool> trash-open;
@@ -344,7 +349,7 @@ export component AppWindow inherits Window {
         VerticalLayout {
             spacing: 0;
 
-            // 聊天卡片：吃满剩余高度；滚动区四周留白 8px
+            // 聊天卡片：吃满剩余高度；顶部助手头栏 44px，其下滚动区四周留白 8px
             Rectangle {
                 vertical-stretch: 1;
                 background: Theme.p.panelBg;
@@ -353,11 +358,59 @@ export component AppWindow inherits Window {
                 border-color: Theme.p.panelBorder;
                 clip: true;
 
+                // 当前会话助手：圆形头像（有图盖图，无图色板圆底+首字）+ 名称
+                HorizontalLayout {
+                    height: 44px;
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 8px;
+                    // 布局不垂直居中定高元素：外套吃满行高的 Rectangle，圆内自居中
+                    Rectangle {
+                        width: 28px;
+                        Rectangle {
+                            y: (parent.height - self.height) / 2;
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 14px;
+                            clip: true;
+                            background: root.chat-ast-color;
+                            if root.chat-ast-img.width > 0 : Image {
+                                width: 28px;
+                                height: 28px;
+                                source: root.chat-ast-img;
+                                image-fit: cover;
+                            }
+                            if root.chat-ast-img.width == 0 : Text {
+                                width: 28px;
+                                height: 28px;
+                                text: root.chat-ast-initial;
+                                color: white;
+                                font-size: 13px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    Text {
+                        text: root.chat-ast-name;
+                        color: Theme.p.textPrimary;
+                        font-size: 13px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Rectangle {
+                    y: 44px;
+                    height: 1px;
+                    background: Theme.p.panelBorder;
+                }
+
                 ScrollView {
                     x: 8px;
-                    y: 8px;
+                    y: 52px;
                     width: parent.width - 16px;
-                    height: parent.height - 16px;
+                    height: parent.height - 60px;
                     // 视口宽钉死为可见宽：否则长消息把视口撑宽，气泡整体偏右、贴不出边距
                     viewport-width: self.visible-width;
                     horizontal-scrollbar-policy: always-off;

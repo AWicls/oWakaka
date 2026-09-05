@@ -33,13 +33,13 @@ const AVATAR_PALETTE: [(u8, u8, u8); 8] = [
     (0x7D, 0x8F, 0x3C), // 橄榄
 ];
 
-fn avatar_color(id: i64) -> Color {
+pub(super) fn avatar_color(id: i64) -> Color {
     let (r, g, b) = AVATAR_PALETTE[id.rem_euclid(AVATAR_PALETTE.len() as i64) as usize];
     Color::from_rgb_u8(r, g, b)
 }
 
 /// 名称首字（Slint string 无 substring，Rust 侧算好注入）；空白名回退「?」。
-fn initial_of(name: &str) -> String {
+pub(super) fn initial_of(name: &str) -> String {
     name.trim()
         .chars()
         .next()
@@ -47,7 +47,7 @@ fn initial_of(name: &str) -> String {
 }
 
 /// 头像图片加载：空路径/加载失败一律回退空图（Slint 侧按 `width == 0` 判无图画圆底首字）。
-fn load_avatar(path: &str) -> Image {
+pub(super) fn load_avatar(path: &str) -> Image {
     if path.is_empty() {
         return Image::default();
     }
@@ -186,11 +186,14 @@ pub(super) fn wire_settings(window: &AppWindow, ctx: &super::Ctx) {
     });
     let window_weak = window.as_weak();
     let models = ctx.models.clone();
+    let host = ctx.host.clone();
     window.on_settings_back(move || {
         if let Some(w) = window_weak.upgrade() {
             w.set_settings_page(false);
             // 提供商/模型/能力可能在页内改过：回对话前重拉一次数据源
             models.sync_store(&w);
+            // 当前会话助手的名/头像可能改过：刷新聊天卡头栏
+            host.sync_assistant_header(&w);
         }
     });
     let window_weak = window.as_weak();
