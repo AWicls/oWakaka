@@ -1,6 +1,8 @@
-// 程序内设置弹窗：config.toml 核心字段（提供商/端点/密钥/激活模型）的读写表单。
+// 程序内设置弹窗：DB 设置（提供商/端点/密钥/激活模型）+ persona 角色设定
+// （助手提示词/用户人设/温度）的读写表单。
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
+import { TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 
 /// 标签 + 单行输入框（空值时显示灰色提示）
@@ -76,15 +78,55 @@ component Pill inherits Rectangle {
     }
 }
 
-/// 设置表单卡片：初值由 AppWindow 注入（打开时从 config.toml 读取），
+/// 标签 + 多行输入（角色提示词）：std TextEdit 定高内滚（其 viewport-height 与
+/// height 内置互绑，外部读取成环，故不自适应高度）。1.17 TextEdit 不露出 color
+/// （随 FluentPalette 系统色板，见「已知边界」），提示走 placeholder-text
+component PromptRow inherits Rectangle {
+    in property <string> label;
+    in-out property <string> text;
+    in property <string> hint;
+
+    height: 124px;
+    VerticalLayout {
+        spacing: 3px;
+        Text {
+            text: root.label;
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            height: 96px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: transparent; // 底色由 TextEdit 自绘，套 theme 色会双层
+            TextEdit {
+                x: 2px;
+                y: 2px;
+                width: parent.width - 4px;
+                height: parent.height - 4px;
+                font-size: 13px;
+                wrap: word-wrap;
+                placeholder-text: root.hint;
+                text <=> root.text;
+            }
+        }
+    }
+}
+
+/// 设置表单卡片：初值由 AppWindow 注入（打开时从 DB 设置 + persona 读取），
 /// 保存经回调交给 Rust 侧校验落盘，状态行回显成功/失败文案
 export component SettingsDialog inherits Rectangle {
     in property <int> init-provider; // 0 通用兼容 | 1 小米 MiMo（与 Rust 映射一致）
     in property <string> init-base-url;
     in property <string> init-api-key;
     in property <string> init-model;
+    in property <string> init-system-prompt; // 助手设定（persona assistant）
+    in property <string> init-user-persona; // 用户人设（persona user）
+    in property <string> init-temperature; // 温度（空 = 未设定）
     in property <string> status;
-    callback saved(int, string, string, string);
+    callback saved(int, string, string, string, string, string, string);
     callback closed();
 
     property <int> picked-provider: root.init-provider;
@@ -145,6 +187,22 @@ export component SettingsDialog inherits Rectangle {
             hint: "mimo-v2.5";
         }
 
+        sys-field := PromptRow {
+            label: "助手设定（system prompt：每次发送前置注入，留空 = 不发）";
+            text: root.init-system-prompt;
+            hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
+        }
+        persona-field := PromptRow {
+            label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
+            text: root.init-user-persona;
+            hint: "例如：资深 Rust 工程师，关注架构与成本";
+        }
+        temp-field := FieldRow {
+            label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
+            text: root.init-temperature;
+            hint: "0.7";
+        }
+
         Text {
             visible: root.status != "";
             text: root.status;
@@ -169,7 +227,8 @@ export component SettingsDialog inherits Rectangle {
                 primary: true;
                 picked => {
                     root.saved(root.picked-provider, url-field.text,
-                        key-field.text, model-field.text);
+                        key-field.text, model-field.text,
+                        sys-field.text, persona-field.text, temp-field.text);
                 }
             }
         }

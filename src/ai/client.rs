@@ -49,7 +49,7 @@ mod chat;
 mod responses;
 mod turn;
 
-pub use turn::{TurnEvent, TurnHandle, TurnOptions};
+pub use turn::{TurnEvent, TurnHandle, TurnOptions, TurnPersona};
 
 use std::time::Duration;
 

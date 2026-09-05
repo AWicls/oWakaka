@@ -29,11 +29,14 @@ export component AppWindow inherits Window {
     in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
     in property <string> model-label; // 当前激活模型显示名
     in property <bool> settings-open; // 设置弹窗开关（Rust 侧点击齿轮置 true）
-    // 设置弹窗初值：Rust 打开时从 config.toml 读取注入
+    // 设置弹窗初值：Rust 打开时从 DB（设置 kv + persona）读取注入
     in property <int> cfg-provider;
     in property <string> cfg-base-url;
     in property <string> cfg-api-key;
     in property <string> cfg-model;
+    in property <string> cfg-system-prompt; // 角色设定：助手 system prompt（persona 表）
+    in property <string> cfg-user-persona; // 角色设定：用户人设（persona 表）
+    in property <string> cfg-temperature; // 角色设定：温度（空串 = 未设定）
     in property <string> cfg-status; // 保存结果回显（错误/成功文案）
     callback send(string);
     callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
@@ -41,10 +44,10 @@ export component AppWindow inherits Window {
     callback select-session(int);
     callback stop(); // 停止当前可见会话的生成
     callback toggle-thinking();
-    callback model-picked(string); // 选择模型（Rust 切换激活 + 回写 config.toml）
+    callback model-picked(string); // 选择模型（Rust 切换激活 + 回写设置 kv）
     callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
-    callback settings-requested(); // 打开设置弹窗（Rust 读 config 注入初值）
-    callback settings-saved(int, string, string, string); // 提供商/base_url/key/model（Rust 校验落盘）
+    callback settings-requested(); // 打开设置弹窗（Rust 读配置注入初值）
+    callback settings-saved(int, string, string, string, string, string, string); // 提供商/base_url/key/model + 助手提示词/用户人设/温度（Rust 校验落盘）
     callback settings-closed(); // 关闭设置弹窗
 
     // 侧栏初始宽 190px（默认窗口 1120 的 ~17%）；不得引用 root.width，
@@ -156,11 +159,12 @@ export component AppWindow inherits Window {
         }
     }
     // if-block：每次打开重建 SettingsDialog 实例，表单初值即最新注入的 cfg-*
+    // 高度含角色设定区后按窗口收（小窗时表单尾部会裁切——弹窗滚动化留待交互打磨）
     if root.settings-open : Rectangle {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         width: 440px;
-        height: 460px;
+        height: Math.min(700px, root.height - 24px);
         SettingsDialog {
             width: parent.width;
             height: parent.height;
@@ -168,8 +172,13 @@ export component AppWindow inherits Window {
             init-base-url: root.cfg-base-url;
             init-api-key: root.cfg-api-key;
             init-model: root.cfg-model;
+            init-system-prompt: root.cfg-system-prompt;
+            init-user-persona: root.cfg-user-persona;
+            init-temperature: root.cfg-temperature;
             status: root.cfg-status;
-            saved(p, url, key, model) => { root.settings-saved(p, url, key, model); }
+            saved(p, url, key, model, sys, persona, temp) => {
+                root.settings-saved(p, url, key, model, sys, persona, temp);
+            }
             closed => { root.settings-closed(); }
         }
     }

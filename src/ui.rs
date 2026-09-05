@@ -38,7 +38,7 @@ use std::{
 };
 
 use crate::ai::{
-    client::{Client, TurnEvent, TurnOptions},
+    client::{Client, TurnEvent, TurnOptions, TurnPersona},
     config::Config,
     provider::Provider,
 };
@@ -173,20 +173,28 @@ impl ModelsState {
     }
 }
 
-/// 设置弹窗保存：只更新暴露字段（stream/api/[models] 等原样保留），
-/// 校验不过不落盘；成功则失效客户端缓存并同步模型下拉（允许重拉远端清单）
-// 参数 = Slint saved(p,url,key,model) 回调直传 + 4 个共享状态，拆包反而绕
+/// 设置弹窗保存：设置字段（stream/api/[models] 等原样保留）+ 角色设定
+/// （助手提示词/温度、用户人设 → persona 活跃行）；校验不过不落盘；
+/// 成功则失效客户端缓存并同步模型下拉（允许重拉远端清单）
+// 参数 = Slint saved 回调直传 + 共享状态，拆包反而绕
 #[allow(clippy::too_many_arguments)]
 fn save_settings(
     p: i32,
     url: &str,
     key: &str,
     model: &str,
+    sys_prompt: &str,
+    user_persona: &str,
+    temp: &str,
     db: &Db,
     cache: &ClientCache,
     models: &ModelsState,
     window: &AppWindow,
 ) -> SharedString {
+    let temperature = match parse_temperature(temp) {
+        Ok(v) => v,
+        Err(msg) => return msg.into(),
+    };
     let mut cfg = match Config::load(db) {
         Ok(cfg) => cfg,
         Err(e) => return format!("读取配置失败: {e}").into(),
@@ -206,6 +214,12 @@ fn save_settings(
     }
     if let Err(e) = cfg.save(db) {
         return format!("保存失败: {e}").into();
+    }
+    let personas = db
+        .upsert_active_persona("assistant", "默认助手", sys_prompt.trim(), temperature)
+        .and_then(|()| db.upsert_active_persona("user", "默认人设", user_persona.trim(), None));
+    if let Err(e) = personas {
+        return format!("设置已存，角色设定保存失败: {e}").into();
     }
     *cache.lock().unwrap() = None; // 下一次发送按新配置重建客户端
     *models.active.borrow_mut() = cfg.model.clone();
@@ -313,6 +327,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     thinking: host.thinking_on.get(),
                     // 模型下拉的激活项；config 缺失时为空串→回落客户端默认模型
                     model: Some(active_model),
+                    // 每次发送现读 DB 活跃角色行（毫秒级）；未设定 = None 零变化
+                    persona: persona_for_turn(&db),
                 },
                 {
                     let tx = tx.clone();
@@ -410,6 +426,18 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 } else {
                     *cache.lock().unwrap() = None;
                 }
+                // 角色设定初值：persona 活跃行（读不到/未设定 = 空白 + 温度空串）
+                if let Ok(Some(a)) = db.active_persona("assistant") {
+                    w.set_cfg_system_prompt(a.system_prompt.into());
+                    w.set_cfg_temperature(
+                        a.temperature
+                            .map_or_else(String::new, |t| format!("{t}"))
+                            .into(),
+                    );
+                }
+                if let Ok(Some(u)) = db.active_persona("user") {
+                    w.set_cfg_user_persona(u.system_prompt.into());
+                }
                 w.set_cfg_status(SharedString::default());
                 w.set_settings_open(true);
             }
@@ -427,11 +455,23 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let cache = cache.clone();
             let models = models.clone();
             let db = db.clone();
-            move |p, url, key, model| {
+            move |p, url, key, model, sys_prompt, user_persona, temp| {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                let status = save_settings(p, &url, &key, &model, &db, &cache, &models, &w);
+                let status = save_settings(
+                    p,
+                    &url,
+                    &key,
+                    &model,
+                    &sys_prompt,
+                    &user_persona,
+                    &temp,
+                    &db,
+                    &cache,
+                    &models,
+                    &w,
+                );
                 w.set_cfg_status(status.clone());
                 if status.starts_with("已保存") {
                     w.set_settings_open(false);
@@ -514,6 +554,34 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.show()?;
     slint::run_event_loop()?;
     Ok(())
+}
+
+/// 每次发送现读 DB 活跃角色行组装轮次人设（毫秒级，读失败按无角色处理不阻断发送）。
+/// 助手/用户两段提示词与温度全空 → `None`（请求与旧行为逐位一致）。
+fn persona_for_turn(db: &Db) -> Option<TurnPersona> {
+    let a = db.active_persona("assistant").ok().flatten();
+    let u = db.active_persona("user").ok().flatten();
+    let p = TurnPersona {
+        system_prompt: a
+            .as_ref()
+            .map_or_else(String::new, |x| x.system_prompt.clone()),
+        user_persona: u.map_or_else(String::new, |x| x.system_prompt),
+        temperature: a.as_ref().and_then(|x| x.temperature),
+    };
+    (!p.is_empty()).then_some(p)
+}
+
+/// 温度文本 → `Option<f64>`：空 = 未设定（不发字段）；非数字或越界 0–2 回 `Err` 文案。
+fn parse_temperature(s: &str) -> Result<Option<f64>, String> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let v: f64 = t.parse().map_err(|_| "温度需为数字")?;
+    if !(0.0..=2.0).contains(&v) {
+        return Err("温度需在 0–2 之间".into());
+    }
+    Ok(Some(v))
 }
 
 /// 取（必要时懒建）客户端；`Err` 携带可直接展示的文案。

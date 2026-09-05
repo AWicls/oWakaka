@@ -9,6 +9,7 @@
 //! let opts = TurnOptions {
 //!     thinking: false,
 //!     model: None,
+//!     persona: None,
 //! };
 //! let ev = TurnEvent::Content("你好".into());
 //! matches!(ev, TurnEvent::Content(t) if t == "你好");
@@ -44,6 +45,29 @@ pub struct TurnOptions {
     pub thinking: bool,
     /// 本轮使用的模型；`None` 用客户端配置的默认模型。UI 切换模型后随发送传入
     pub model: Option<String>,
+    /// 角色设定（DB-3）：`Some` 时把系统提示词作首条 system 消息、温度注入请求体；
+    /// `None` 或全空 = 行为与旧一致（无 system 前缀、不发 temperature）
+    pub persona: Option<TurnPersona>,
+}
+
+/// 轮次角色设定投影（[`Persona`](crate::db::Persona) 活跃两行的可发送合并视图，UI 侧读取）。
+#[derive(Debug, Clone, Default)]
+pub struct TurnPersona {
+    /// 助手系统提示词（system 消息主体；空 = 不注入该段）
+    pub system_prompt: String,
+    /// 用户人设描述（非空则并入 system 消息附段；空 = 不注入该段）
+    pub user_persona: String,
+    /// 温度（取助手设定）；`None` = 未设定，不发字段
+    pub temperature: Option<f64>,
+}
+
+impl TurnPersona {
+    /// 全空判定（UI 侧：空则整体按无角色处理）
+    pub fn is_empty(&self) -> bool {
+        self.system_prompt.trim().is_empty()
+            && self.user_persona.trim().is_empty()
+            && self.temperature.is_none()
+    }
 }
 
 /// 已投出对话轮次的控制柄：消费即请求停止本轮生成。
@@ -96,13 +120,32 @@ impl Client {
     }
 }
 
-/// 轮次请求组装：模型取 [`TurnOptions::model`]（非空覆盖）否则客户端配置的默认模型。
+/// 轮次请求组装：模型取 [`TurnOptions::model`]（非空覆盖）否则客户端配置的默认模型；
+/// 角色设定折进请求（[`persona_system`] + `temperature` 并入 `extra` 平铺透传）。
 fn build_request(
     default_model: &str,
     api: Api,
     opts: &TurnOptions,
-    history: Vec<Message>,
+    mut history: Vec<Message>,
 ) -> Request {
+    let mut extra = thinking_extra(api, opts.thinking);
+    if let Some(p) = &opts.persona {
+        if let Some(system) = persona_system(p) {
+            history.insert(
+                0,
+                Message {
+                    role: "system".into(),
+                    content: Some(system),
+                    extra: None,
+                },
+            );
+        }
+        if let Some(t) = p.temperature {
+            let mut obj = extra.unwrap_or_else(|| serde_json::json!({}));
+            obj["temperature"] = serde_json::Value::from(t);
+            extra = Some(obj);
+        }
+    }
     Request {
         model: opts
             .model
@@ -110,7 +153,18 @@ fn build_request(
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| default_model.to_string()),
         messages: history,
-        extra: thinking_extra(api, opts.thinking),
+        extra,
+    }
+}
+
+/// 组装首条 system 消息：助手提示词为主体，用户人设作附段；两段全空 = `None` 不发。
+fn persona_system(p: &TurnPersona) -> Option<String> {
+    let (a, u) = (p.system_prompt.trim(), p.user_persona.trim());
+    match (a.is_empty(), u.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(a.to_string()),
+        (true, false) => Some(format!("【用户人设】{u}")),
+        (false, false) => Some(format!("{a}\n\n【用户人设】{u}")),
     }
 }
 
@@ -148,23 +202,90 @@ mod tests {
         assert_eq!(
             base(TurnOptions {
                 thinking: true,
-                model: None
+                model: None,
+                persona: None
             }),
             "cfg-model"
         );
         assert_eq!(
             base(TurnOptions {
                 thinking: true,
-                model: Some("mimo-v2.5".into())
+                model: Some("mimo-v2.5".into()),
+                persona: None
             }),
             "mimo-v2.5"
         );
         assert_eq!(
             base(TurnOptions {
                 thinking: true,
-                model: Some(String::new())
+                model: Some(String::new()),
+                persona: None
             }),
             "cfg-model"
         );
+    }
+
+    fn persona(system: &str, user: &str, temp: Option<f64>) -> Option<TurnPersona> {
+        let p = TurnPersona {
+            system_prompt: system.into(),
+            user_persona: user.into(),
+            temperature: temp,
+        };
+        (!p.is_empty()).then_some(p)
+    }
+
+    fn one_history() -> Vec<Message> {
+        vec![Message {
+            role: "user".into(),
+            content: Some("hi".into()),
+            extra: None,
+        }]
+    }
+
+    #[test]
+    fn persona_prepends_system_and_sets_temperature() {
+        let opts = TurnOptions {
+            thinking: true,
+            model: None,
+            persona: persona("你言简意赅", "资深 Rust 工程师", Some(0.2)),
+        };
+        let req = build_request("def", Api::Chat, &opts, one_history());
+        assert_eq!(req.messages[0].role, "system");
+        assert_eq!(
+            req.messages[0].content.as_deref(),
+            Some("你言简意赅\n\n【用户人设】资深 Rust 工程师")
+        );
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(
+            req.extra.unwrap()["temperature"],
+            serde_json::Value::from(0.2)
+        );
+    }
+
+    #[test]
+    fn temperature_merges_into_existing_reasoning_extra() {
+        let opts = TurnOptions {
+            thinking: false,
+            model: None,
+            persona: persona("", "", Some(1.0)),
+        };
+        let req = build_request("def", Api::Chat, &opts, one_history());
+        let extra = req.extra.unwrap();
+        assert_eq!(extra["temperature"], serde_json::Value::from(1.0));
+        assert!(extra.get("reasoning").is_some(), "reasoning 键不被顶掉");
+        // 人设两段全空则不掺 system 消息
+        assert_eq!(req.messages.len(), 1);
+    }
+
+    #[test]
+    fn no_persona_is_bit_for_bit_old_behavior() {
+        let opts = TurnOptions {
+            thinking: true,
+            model: None,
+            persona: None,
+        };
+        let req = build_request("def", Api::Chat, &opts, one_history());
+        assert_eq!(req.messages.len(), 1);
+        assert!(req.extra.is_none());
     }
 }

@@ -12,17 +12,33 @@
 //!   外部来路）当前恒为默认值，占列免将来 ALTER。
 //! - **kv 表**（DB-2）：小配置 JSON 一站一值（如 `config` = 运行配置，密钥除外，
 //!   见 [`crate::ai::config`]）；`CHECK(json_valid)` 挡住误写的裸字符串。
+//! - **persona 表**（DB-3）：角色设定（system prompt / 温度），一 kind 一活跃行。
 
 use std::{error::Error, fs, path::Path};
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-/// 当前 schema 版本。改动表结构 = 此数 +1，旧库整库重建（开发期策略）。
-pub const SCHEMA_VERSION: i32 = 2;
+/// 当前 schema 版本。改动表结构 = 此数 +1，旧库整库重建（开发期策略；
+/// 纯新增表可像 v2→v3 那样留补表例外，保住已有数据）。
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// SQLite 生成的"现在"：RFC3339 UTC 带毫秒（strftime 的 %f 输出 SS.mmm）。
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+
+/// persona 表 DDL（v3 起，DB-3 角色设定）：一 kind 一活跃行；`session.persona_id`
+/// 的多人格切换留待后续，当前 UI 只编辑活跃行。温度 NULL = 未设定（请求不发字段）。
+const PERSONA_DDL: &str = "CREATE TABLE IF NOT EXISTS persona (
+               id            INTEGER PRIMARY KEY,
+               kind          TEXT    NOT NULL CHECK (kind IN ('user','assistant')),
+               name          TEXT    NOT NULL DEFAULT '',
+               system_prompt TEXT    NOT NULL DEFAULT '',
+               temperature   REAL,
+               payload       TEXT    CHECK (payload IS NULL OR json_valid(payload)),
+               is_active     INTEGER NOT NULL DEFAULT 0,
+               created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+               updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+             );";
 
 /// 消息的 JSON 叶子：只放不查询的展示态，全部字段可缺省（读旧行容错）。
 ///
@@ -82,6 +98,21 @@ pub struct LoadedSession {
     pub messages: Vec<LoadedMessage>,
 }
 
+/// 一行角色设定（persona 表活跃行投影；payload 列暂不露出）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Persona {
+    /// 行 id
+    pub id: i64,
+    /// "user" | "assistant"
+    pub kind: String,
+    /// 显示名（当前恒"默认…"，多人格管理再启用）
+    pub name: String,
+    /// 系统提示词（assistant）/ 人设描述（user）；空 = 不注入
+    pub system_prompt: String,
+    /// 生成温度；`None` = 未设定，请求不发 temperature 字段
+    pub temperature: Option<f64>,
+}
+
 /// 数据库句柄：打开即完成建目录、PRAGMA、版本检查与建表。
 ///
 /// 文件库往返 = 模拟"重启不丢"：
@@ -136,7 +167,7 @@ impl Db {
         Self::setup(Connection::open_in_memory()?)
     }
 
-    /// 打开后的统一初始化：PRAGMA → 版本检查（不匹配即重建）。
+    /// 打开后的统一初始化：PRAGMA → 版本检查（不匹配重建；纯补表版本走例外）。
     fn setup(conn: Connection) -> Result<Self, Box<dyn Error>> {
         conn.busy_timeout(std::time::Duration::from_millis(3000))?;
         // 值即结果行（内存库回 "memory"），忽略即可
@@ -144,7 +175,13 @@ impl Db {
         conn.execute("PRAGMA foreign_keys=ON", [])?;
         let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != SCHEMA_VERSION {
-            Self::create_schema(&conn)?;
+            // 一次性例外：v2→v3 纯新增 persona 表，补表保住已有会话数据；
+            // 其余任何不匹配仍按开发期策略整库重建
+            if version == 2 {
+                conn.execute_batch(PERSONA_DDL)?;
+            } else {
+                Self::create_schema(&conn)?;
+            }
             conn.execute(&format!("PRAGMA user_version={SCHEMA_VERSION}"), [])?;
         }
         Ok(Self { conn })
@@ -156,6 +193,7 @@ impl Db {
             "DROP TABLE IF EXISTS message;
              DROP TABLE IF EXISTS session;
              DROP TABLE IF EXISTS kv;
+             DROP TABLE IF EXISTS persona;
              CREATE TABLE kv (
                key        TEXT PRIMARY KEY,
                value      TEXT NOT NULL CHECK (json_valid(value)),
@@ -169,8 +207,10 @@ impl Db {
                created_at   TEXT    NOT NULL DEFAULT ({NOW}),
                updated_at   TEXT    NOT NULL DEFAULT ({NOW})
              );
-             CREATE INDEX session_activity ON session(updated_at, id);
-             CREATE TABLE message (
+             CREATE INDEX session_activity ON session(updated_at, id);"
+        ))?;
+        conn.execute_batch(&format!(
+            "CREATE TABLE message (
                id         INTEGER PRIMARY KEY,
                session_id INTEGER NOT NULL REFERENCES session(id),
                seq        INTEGER NOT NULL,
@@ -182,7 +222,8 @@ impl Db {
                created_at TEXT    NOT NULL DEFAULT ({NOW}),
                updated_at TEXT    NOT NULL DEFAULT ({NOW}),
                UNIQUE (session_id, seq)
-             );"
+             );
+             {PERSONA_DDL}"
         ))?;
         Ok(())
     }
@@ -220,6 +261,73 @@ impl Db {
             ),
             rusqlite::params![key, value],
         )?;
+        Ok(())
+    }
+
+    /// 某 kind 的活跃角色设定行；未设定过为 `None`。
+    pub fn active_persona(&self, kind: &str) -> Result<Option<Persona>, Box<dyn Error>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, kind, name, system_prompt, temperature
+                 FROM persona WHERE kind = ?1 AND is_active = 1 ORDER BY id LIMIT 1",
+                [kind],
+                |r| {
+                    Ok(Persona {
+                        id: r.get(0)?,
+                        kind: r.get(1)?,
+                        name: r.get(2)?,
+                        system_prompt: r.get(3)?,
+                        temperature: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// 保存角色设定：有活跃行即更新，无则建为活跃（一 kind 恒一行）。
+    ///
+    /// 往返与"未设定 = NULL"可离线验证：
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use o_wakaka::db::Db;
+    ///
+    /// let db = Db::open_in_memory()?;
+    /// assert_eq!(db.active_persona("assistant")?, None);
+    /// db.upsert_active_persona("assistant", "默认助手", "你言简意赅", Some(0.3))?;
+    /// let p = db.active_persona("assistant")?.unwrap();
+    /// assert_eq!((p.name.as_str(), p.system_prompt.as_str(), p.temperature),
+    ///            ("默认助手", "你言简意赅", Some(0.3)));
+    /// // 再存覆盖同一行（id 不变），温度可清空回未设定
+    /// db.upsert_active_persona("assistant", "默认助手", "你罗嗦", None)?;
+    /// let p2 = db.active_persona("assistant")?.unwrap();
+    /// assert_eq!((p2.id, p2.system_prompt.as_str(), p2.temperature), (p.id, "你罗嗦", None));
+    /// // user kind 独立成行，未存过仍是 None
+    /// assert_eq!(db.active_persona("user")?, None);
+    /// # Ok(()) }
+    /// ```
+    pub fn upsert_active_persona(
+        &self,
+        kind: &str,
+        name: &str,
+        system_prompt: &str,
+        temperature: Option<f64>,
+    ) -> Result<(), Box<dyn Error>> {
+        let updated = self.conn.execute(
+            &format!(
+                "UPDATE persona SET name = ?1, system_prompt = ?2, temperature = ?3,
+                 updated_at = {NOW} WHERE kind = ?4 AND is_active = 1"
+            ),
+            rusqlite::params![name, system_prompt, temperature, kind],
+        )?;
+        if updated == 0 {
+            self.conn.execute(
+                "INSERT INTO persona (kind, name, system_prompt, temperature, is_active)
+                 VALUES (?1, ?2, ?3, ?4, 1)",
+                rusqlite::params![kind, name, system_prompt, temperature],
+            )?;
+        }
         Ok(())
     }
 
@@ -333,6 +441,26 @@ mod tests {
         let sid = rebuilt.insert_session("fresh")?;
         rebuilt.insert_message(sid, "user", "ok", "", None)?;
         assert_eq!(rebuilt.load_all()?[0].messages.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn v2_to_v3_upgrades_by_adding_table_only() -> Result<(), Box<dyn Error>> {
+        let db = Db::open_in_memory()?;
+        let sid = db.insert_session("old")?;
+        db.insert_message(sid, "user", "hi", "", None)?;
+        let Db { conn } = db;
+        conn.execute("PRAGMA user_version=2", [])?;
+        let upgraded = Db::setup(conn)?;
+        // 已有会话原样保留（对比其他版本差的整库重建路径）
+        assert_eq!(upgraded.load_all()?[0].title, "old");
+        // 新表即插即用
+        upgraded.upsert_active_persona("assistant", "默认助手", " prompt ", Some(0.5))?;
+        let p = upgraded.active_persona("assistant")?.unwrap();
+        assert_eq!(
+            (p.system_prompt.as_str(), p.temperature),
+            (" prompt ", Some(0.5))
+        );
         Ok(())
     }
 

@@ -8,6 +8,11 @@
 ## [Unreleased]
 
 ### Added
+- 角色设定入库并注入请求（DB-3，persona）：
+  - 新增 `persona` 表（一 kind 一活跃行：`assistant` 存系统提示词+温度，`user` 存人设描述；温度 NULL = 不发字段）；`SCHEMA_VERSION` 2→3 为**纯补表例外**（v2 库只补建表不清数据，其余版本差不匹配仍整库重建）
+  - 发送链路：每次发送现读 DB 活跃行组装 `TurnOptions.persona`——助手提示词作首条 system 消息、用户人设并入【用户人设】附段、温度并入请求体 `extra`（与 `reasoning` 键共存互不顶掉）；未设定角色时请求与旧行为逐位一致
+  - 设置弹窗新增三字段：助手设定（多行 TextEdit）、用户人设（多行）、温度（单行，0–2 校验、留空=不发）；保存与设置一并落盘，重启回显
+  - 测试：persona 存取自成一体/温度可清空 doctest、v2→v3 补表不丢数据单测、system 前置+温度注入/reasoning 合并不被顶掉/无人设零变化单测 3
 - 配置存储入 DB（DB-2，`config.toml` 瘦身为仅密钥）：
   - 新增 `kv` 表（JSON 值 CHECK 把关）；运行配置（provider/base_url/model/api/stream/[models] 别名）整体作设置 JSON 存 `kv("config")`，**密钥序列化即丢、永不进 DB**（`Config.api_key` skip_serializing + `Secrets` 独立结构，均 Debug 恒脱敏）
   - 读取两路组装（`Config::load(db)`）：设置取 DB、密钥取 `config.toml`；DB 无配置时回落老式全量 toml——**首次保存设置/切换模型自动完成拆分迁移**，老配置零改动照常可用；此后 `config.toml` 只剩 `api_key` 一行
