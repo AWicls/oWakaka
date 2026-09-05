@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! 主线程  用户输入 ──▶ on_send ──▶ spawn_chat ──▶ tokio 后台任务
-//!   ▲                                             │ chat_stream
+//!   ▲                                             │ generate（按配置分发接口族/流式）
 //!   │ Timer 30ms 排空                             │ Reasoning/Content/Done/Error
 //!   └── UiEvent ◀──────── mpsc::channel ◀─────────┘
 //! ```
@@ -70,7 +70,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let (tx, rx) = mpsc::channel::<UiEvent>();
     let cache: ClientCache = Arc::new(Mutex::new(None));
 
-    // —— 发送路径：贴用户气泡 → 快照历史 → 后台流式请求 ——
+    // —— 发送路径：贴用户气泡 → 快照历史 → 后台请求（方式按配置分发） ——
     {
         let window_weak = window.as_weak();
         let messages = messages.clone();
@@ -173,7 +173,8 @@ fn ensure_client(cache: &ClientCache) -> Result<(Arc<Client>, String), String> {
     Ok((client.clone(), model.clone()))
 }
 
-/// 把一轮流式对话投给 tokio 后台任务：delta 实时回传，收尾发 Done/Error。
+/// 把一轮对话投给 tokio 后台任务：端点族与流式方式由 `client.generate`
+/// 按配置分发，增量实时回传，收尾发 Done/Error。
 ///
 /// 任务与 UI 之间只有 `tx` 单向通道，不持有任何 Slint 句柄。
 fn spawn_chat(
@@ -192,7 +193,7 @@ fn spawn_chat(
             extra: None,
         };
         let result = client
-            .chat_stream(&req, move |ev| {
+            .generate(&req, move |ev| {
                 let ui = match ev {
                     StreamEvent::Reasoning(t) => UiEvent::Reasoning(t),
                     StreamEvent::Content(t) => UiEvent::Content(t),

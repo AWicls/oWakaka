@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+### Added
+- OpenAI Responses API（`/responses`）接入：
+  - 线格式 DTO（`dto/openai_response/`）：请求 `input` 消息项、非流式 `output` 条目（`Response::assistant_text()`/`reasoning_text()` 提取正文与思考摘要）、流式语义事件（`Event`），`extra` 平铺透传扩展字段
+  - `Client::respond()`（非流式）与 `Client::respond_stream()`（流式）：语义事件按 `type` 分发，回答 `response.output_text.delta`、思考 `response.reasoning_summary_text.delta`（兼容 `reasoning_text.delta`）；`response.completed`/`[DONE]`/EOF 终止，`error`/`response.failed` 报新错误变体 `ChatError::Stream`
+  - 统一对话入口 `Client::generate()`：按配置在两端点族 × 流式/非流式四路径分发，非流式把整段回复折算成事件现场回调（先思考后正文），UI 侧唯一调用点
+- 配置项（老配置文件缺字段照常加载）：
+  - `api`：缺省 `"chat"` 兼容接口保底，手动设 `"responses"` 启用新接口
+  - `stream`：缺省 `true` 流式，手动设 `false` 整段一次性返回
+- 测试：Responses SSE 事件分发 / 请求转换 / 非流式折算 3 个离线单测 + 3 个 DTO doctest；真实网关测试 `respond_roundtrip`/`respond_stream_roundtrip`（`#[ignore]`）
+
 ## [0.2.0] - 2026-09-05
 
 ### Added
