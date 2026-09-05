@@ -471,8 +471,8 @@ export component SettingsPage inherits Rectangle {
     callback saved(string, string, string); // 助手提示词/用户人设/温度
     callback back();
 
-    // 0 界面 | 1 提供商（默认：改配置主路径）| 2 AI 助手 | 3 用户设定
-    property <int> page: 1;
+    // 0 界面（默认）| 1 提供商 | 2 AI 助手 | 3 用户设定
+    property <int> page: 0;
     property <bool> add-menu: false;        // 新增提供商弹层
     property <bool> remote-open: false;     // 远端模型清单弹层（拉取按钮开启，遮罩关闭）
     property <bool> custom-open: false;     // 自定义模型输入行（「自定义」按钮开合）
@@ -647,15 +647,22 @@ export component SettingsPage inherits Rectangle {
                                     text <=> root.prov-name;
                                     hint: root.sel-kind;
                                 }
-                                if root.prov-sel != "" : FieldRow {
-                                    label: "基础地址（custom 必填；定制厂商留空 = 内置端点）";
-                                    text <=> root.prov-base;
-                                    hint: "https://api.openai.com/v1";
-                                }
-                                if root.prov-sel != "" : FieldRow {
-                                    label: "路径后缀（可选，拼在基础地址后）";
-                                    text <=> root.prov-suffix;
-                                    hint: "如 proxy/aigw，可留空";
+                                // 基础地址与路径后缀并排（2:1 分宽）
+                                if root.prov-sel != "" : HorizontalLayout {
+                                    spacing: 8px;
+                                    height: 52px;
+                                    FieldRow {
+                                        horizontal-stretch: 2;
+                                        label: "基础地址（custom 必填；定制厂商留空 = 内置端点）";
+                                        text <=> root.prov-base;
+                                        hint: "https://api.openai.com/v1";
+                                    }
+                                    FieldRow {
+                                        horizontal-stretch: 1;
+                                        label: "路径后缀（可选）";
+                                        text <=> root.prov-suffix;
+                                        hint: "如 proxy/aigw，可留空";
+                                    }
                                 }
                                 if root.prov-sel != "" : FieldRow {
                                     label: "API 密钥（留空 = 保持已存值不变；只存 config.toml，不进 DB）";
@@ -740,7 +747,16 @@ export component SettingsPage inherits Rectangle {
                                             label: "测试连通";
                                             picked => { root.prov-tested(); }
                                         }
-                                        Rectangle { horizontal-stretch: 1; }
+                                        // 测试/操作结果就地回显在按钮右侧（超长省略号）
+                                        if root.prov-status != "" : Text {
+                                            horizontal-stretch: 1;
+                                            text: root.prov-status;
+                                            color: Theme.p.link;
+                                            font-size: 12px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                        if root.prov-status == "" : Rectangle { horizontal-stretch: 1; }
                                         Pill {
                                             width: 72px;
                                             label: "自定义";
@@ -829,12 +845,6 @@ export component SettingsPage inherits Rectangle {
                                                 root.custom-open = false;
                                             }
                                         }
-                                    }
-                                    if root.prov-status != "" : Text {
-                                        text: root.prov-status;
-                                        color: Theme.p.link;
-                                        font-size: 12px;
-                                        wrap: word-wrap;
                                     }
                                 }
 
