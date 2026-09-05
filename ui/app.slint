@@ -5,7 +5,7 @@
 // 配色一律取自 theme.slint 的 Theme 全局（VS Code 现代深/浅双主题 + 跟随系统）。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, Icon } from "theme.slint";
 import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
@@ -59,14 +59,14 @@ enum CaptionIcon {
     close,
 }
 
-/// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger（关闭）悬停红底白图标
+/// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger（关闭）悬停红底白图标；图标复用 theme.slint Icon
 component CaptionBtn inherits Rectangle {
     in property <CaptionIcon> icon;
     in property <bool> danger: false;
     callback picked();
 
     property <brush> fg: ta.has-hover && root.danger ? white : Theme.p.textSecondary;
-    // 实底按钮色（非悬停=标题栏底色）：还原图标前块用它遮住后块重叠线
+    // 实底按钮色（非悬停=标题栏底色）：还原图标前框用它遮住后框重叠线（作 Icon.fill2）
     property <brush> btn-bg: ta.has-hover ? (root.danger ? #c42b1c : Theme.p.listHover) : Theme.p.windowBg;
 
     width: 46px;
@@ -77,75 +77,18 @@ component CaptionBtn inherits Rectangle {
         mouse-cursor: pointer;
         clicked => { root.picked(); }
     }
-    // 图标统一 16×16 viewbox 描边（同 theme.slint Icon 惯例）
-    // 最小化：横条
-    Path {
-        visible: root.icon == CaptionIcon.minimize;
+    // 图标收编至 theme.slint Icon（枚举→which），不再在此各写一套 Path
+    Icon {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 16px;
         height: 16px;
-        viewbox-width: 16;
-        viewbox-height: 16;
-        stroke: root.fg;
-        stroke-width: 1.2px;
-        fill: transparent;
-        commands: "M3,8 H13";
-    }
-    // 最大化：方框
-    Path {
-        visible: root.icon == CaptionIcon.maximize;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 16px;
-        height: 16px;
-        viewbox-width: 16;
-        viewbox-height: 16;
-        stroke: root.fg;
-        stroke-width: 1.2px;
-        fill: transparent;
-        commands: "M3,3 H13 V13 H3 Z";
-    }
-    // 还原：后框描边 + 前框实底挡重叠线
-    Path {
-        visible: root.icon == CaptionIcon.restore;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 16px;
-        height: 16px;
-        viewbox-width: 16;
-        viewbox-height: 16;
-        stroke: root.fg;
-        stroke-width: 1.2px;
-        fill: transparent;
-        commands: "M2,2 H10 V10 H2 Z";
-    }
-    Path {
-        visible: root.icon == CaptionIcon.restore;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 16px;
-        height: 16px;
-        viewbox-width: 16;
-        viewbox-height: 16;
-        stroke: root.fg;
-        stroke-width: 1.2px;
-        fill: root.btn-bg;
-        commands: "M6,6 H14 V14 H6 Z";
-    }
-    // 关闭：斜交叉
-    Path {
-        visible: root.icon == CaptionIcon.close;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 16px;
-        height: 16px;
-        viewbox-width: 16;
-        viewbox-height: 16;
-        stroke: root.fg;
-        stroke-width: 1.2px;
-        fill: transparent;
-        commands: "M4,4 L12,12 M12,4 L4,12";
+        // 8 最小化 | 9 最大化 | 10 还原 | 11 叉号（关闭）
+        which: root.icon == CaptionIcon.minimize ? 8
+             : root.icon == CaptionIcon.maximize ? 9
+             : root.icon == CaptionIcon.restore ? 10 : 11;
+        ink: root.fg;
+        fill2: root.btn-bg;
     }
 }
 
