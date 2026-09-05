@@ -25,13 +25,17 @@
 //! - `ui.rs`（本文件）：入口 [`run`]——构建窗口、接线回调、Timer 事件路由
 //! - `ui/host.rs`：多会话簿记（侧栏、可见会话、生成轮次与取消句柄）
 //! - `ui/bubbles.rs`：气泡模型操作（增量合并、思考折叠、历史投影）
+//! - `ui/models.rs`：模型下拉状态机（清单/激活/别名/能力）
+//! - `ui/prov.rs`：提供商页装配（providers 整包 ↔ 窗口属性）
+//! - `ui/settings.rs`：设置页保存（角色设定 → persona 活跃行）
 
 mod bubbles;
 mod host;
+mod models;
+mod prov;
+mod settings;
 
 use std::{
-    cell::{Cell, RefCell},
-    collections::BTreeMap,
     rc::Rc,
     sync::{Arc, Mutex, mpsc},
     time::Duration,
@@ -39,15 +43,19 @@ use std::{
 
 use crate::ai::{
     client::{Client, TurnEvent, TurnOptions, TurnPersona},
-    config::{Api, Config, Secrets, load_toml, store_toml},
     provider::Provider,
-    providers::{ModelInfo, Providers, join_url},
+    providers::Providers,
 };
 use crate::db::Db;
 use slint::{Model, SharedString, Timer, TimerMode, VecModel};
 
 use bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history};
 use host::{Host, RunRef, StreamMsg};
+use models::ModelsState;
+use prov::{
+    model_upsert, prov_inject, prov_models_refresh, prov_save, prov_test_config, remote_mark_added,
+};
+use settings::save_personas;
 
 slint::include_modules!();
 
@@ -65,386 +73,7 @@ enum UiMsg {
     ProvFetch(Result<Vec<String>, String>),
 }
 
-/// 模型切换下拉的 UI 状态：数据源、激活 ID、别名表（当前提供商模型）、思考能力表；
-/// `fetched` 防抖——首次打开下拉才拉远端 `/models`，失败时下回打开可重试
-#[derive(Clone)]
-struct ModelsState {
-    db: Rc<Db>,
-    items: Rc<VecModel<ModelItem>>,
-    active: Rc<RefCell<String>>,
-    aliases: Rc<RefCell<BTreeMap<String, String>>>,
-    caps: Rc<RefCell<BTreeMap<String, bool>>>,
-    fetched: Rc<Cell<bool>>,
-}
-
-impl ModelsState {
-    /// 初始值取自运行配置（model + 提供商模型别名/能力）；读不到则空激活（发送回落客户端默认）
-    fn from_config(db: Rc<Db>) -> Self {
-        let (active, aliases) = match Config::load(&db) {
-            Ok(cfg) => (cfg.model, cfg.models),
-            Err(_) => (String::new(), BTreeMap::new()),
-        };
-        let caps = load_caps(&db);
-        let state = Self {
-            db,
-            items: Rc::new(VecModel::default()),
-            active: Rc::new(RefCell::new(active)),
-            aliases: Rc::new(RefCell::new(aliases)),
-            caps: Rc::new(RefCell::new(caps)),
-            fetched: Rc::new(Cell::new(false)),
-        };
-        state.rebuild(None);
-        state
-    }
-
-    /// 模型 ID 的显示名：config 别名优先，未配/空别名原样显示
-    fn display(&self, id: &str) -> SharedString {
-        self.aliases
-            .borrow()
-            .get(id)
-            .filter(|a| !a.is_empty())
-            .map_or_else(|| id.into(), |a| a.as_str().into())
-    }
-
-    /// 重建下拉清单：{激活} ∪ config 别名键 ∪ 远端结果，去重保序（激活恒首位）
-    fn rebuild(&self, remote: Option<&[String]>) {
-        let active = self.active.borrow().clone();
-        let mut ids: Vec<String> = Vec::new();
-        {
-            let mut push = |id: &str| {
-                if !id.is_empty() && !ids.iter().any(|x| x == id) {
-                    ids.push(id.to_string());
-                }
-            };
-            push(&active);
-            for id in self.aliases.borrow().keys() {
-                push(id);
-            }
-            if let Some(remote) = remote {
-                for id in remote {
-                    push(id);
-                }
-            }
-        }
-        let rows = ids
-            .into_iter()
-            .map(|id| ModelItem {
-                display: self.display(&id),
-                id: id.into(),
-                current: false,
-            })
-            .collect::<Vec<_>>();
-        let active_s: SharedString = active.into();
-        let rows: Vec<ModelItem> = rows
-            .into_iter()
-            .map(|mut m| {
-                m.current = m.id == active_s;
-                m
-            })
-            .collect();
-        self.items.set_vec(rows);
-    }
-
-    /// 把状态同步到窗口（下拉数据源 + 模型按钮文案 + 思考能力位）
-    fn apply(&self, window: &AppWindow) {
-        window.set_models(self.items.clone().into());
-        let active = self.active.borrow().clone();
-        let label = if active.is_empty() {
-            "未选模型".into()
-        } else {
-            self.display(&active)
-        };
-        window.set_model_label(label);
-        let capable = self.supports_thinking(&active);
-        window.set_thinking_capable(capable);
-    }
-
-    /// 当前激活模型是否支持思考（未登记的模型视为支持，绝不误关）
-    fn supports_thinking(&self, id: &str) -> bool {
-        self.caps.borrow().get(id).copied().unwrap_or(true)
-    }
-
-    /// 从设置页返回后重拉提供商数据源（模型增删/别名/能力可能已变）
-    fn sync_store(&self, window: &AppWindow) {
-        if let Ok(cfg) = Config::load(&self.db) {
-            *self.aliases.borrow_mut() = cfg.models;
-        }
-        *self.caps.borrow_mut() = load_caps(&self.db);
-        self.rebuild(None);
-        self.apply(window);
-    }
-
-    /// 切换激活模型：本会话即时生效（后续发送携带）并回写设置（DB kv），
-    /// 回写失败仅影响重启后持久，打日志不阻断
-    fn pick(&self, window: &AppWindow, id: String) {
-        if id.is_empty() || id == *self.active.borrow() {
-            return;
-        }
-        *self.active.borrow_mut() = id;
-        self.rebuild(None);
-        self.apply(window);
-        let active = self.active.borrow().clone();
-        if let Err(e) = self.persist_model(&active) {
-            eprintln!("模型回写设置失败（仅本次会话生效）: {e}");
-        }
-    }
-
-    /// 把激活模型写回 providers 整包的 active_model 字段
-    fn persist_model(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        Providers::set_active_model(&self.db, id)
-    }
-}
-
-/// 设置页「保存」= 仅角色设定两页（助手提示词/温度、用户人设 → persona 活跃行）。
-/// 提供商字段由提供商页即时落盘，不经此；温度非法直接回文案不落盘。
-fn save_personas(db: &Db, sys_prompt: &str, user_persona: &str, temp: &str) -> SharedString {
-    let temperature = match parse_temperature(temp) {
-        Ok(v) => v,
-        Err(msg) => return msg.into(),
-    };
-    let r = db
-        .upsert_active_persona("assistant", "默认助手", sys_prompt.trim(), temperature)
-        .and_then(|()| db.upsert_active_persona("user", "默认人设", user_persona.trim(), None));
-    match r {
-        Ok(()) => "已保存，下一次发送生效".into(),
-        Err(e) => format!("保存失败: {e}").into(),
-    }
-}
-
-// —— 提供商页装配（Step A：providers 整包即时读写，密钥恒不下 UI） ——
-
-/// 表单 api 序号 ↔ 枚举（0 chat | 1 responses）
-fn api_of(i: i32) -> Api {
-    if i == 1 { Api::Responses } else { Api::Chat }
-}
-
-fn api_to_i(api: Api) -> i32 {
-    match api {
-        Api::Chat => 0,
-        Api::Responses => 1,
-    }
-}
-
-/// 重注入提供商列表与详情。select 为空 = 维持当前选中；选中失效回落 active。
-/// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
-fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
-    let ps = Providers::load(db).unwrap_or_default();
-    let rows: Vec<ProvRow> = ps
-        .list
-        .iter()
-        .map(|e| ProvRow {
-            id: e.id.as_str().into(),
-            name: e.name.as_str().into(),
-            kind: e.kind.display_name().into(),
-            active: e.id == ps.active,
-            deleted: e.deleted,
-        })
-        .collect();
-    window.set_provs(Rc::new(VecModel::from(rows)).into());
-    window.set_remote_models(slint::ModelRc::default()); // 远端清单不跨提供商缓存（端点已变）
-    let mut sel = select.to_string();
-    if sel.is_empty() {
-        sel = window.get_prov_sel().to_string();
-    }
-    if ps.find(&sel).is_none() {
-        sel = ps.active.clone();
-    }
-    window.set_prov_sel(sel.as_str().into());
-    let Some(e) = ps.find(&sel) else {
-        // 零可用条目：表单整体清空，仅剩新增入口
-        window.set_prov_name("".into());
-        window.set_prov_base("".into());
-        window.set_prov_suffix("".into());
-        window.set_prov_key("".into());
-        window.set_prov_api(0);
-        window.set_sel_kind("".into());
-        window.set_sel_locked(false);
-        window.set_sel_active(false);
-        window.set_sel_deleted(false);
-        window.set_prov_models(Rc::new(VecModel::<ModelRow>::default()).into());
-        return;
-    };
-    window.set_prov_name(e.name.as_str().into());
-    window.set_prov_base(e.base_url.as_str().into());
-    window.set_prov_suffix(e.url_suffix.as_str().into());
-    window.set_prov_key("".into());
-    window.set_prov_api(api_to_i(e.kind.locked_api().or(e.api).unwrap_or_default()));
-    window.set_sel_kind(e.kind.display_name().into());
-    window.set_sel_locked(e.kind.locked_api().is_some());
-    window.set_sel_active(sel == ps.active);
-    window.set_sel_deleted(e.deleted);
-    prov_models_refresh(&ps, window);
-}
-
-/// 当前选中提供商的模型列表 → 窗口（Step B 行级 CRUD 的展示面）。
-fn prov_models_refresh(ps: &Providers, window: &AppWindow) {
-    let rows: Vec<ModelRow> = ps
-        .find(&window.get_prov_sel())
-        .filter(|e| !e.deleted)
-        .map(|e| {
-            e.models
-                .iter()
-                .map(|m| ModelRow {
-                    id: m.id.as_str().into(),
-                    alias: m.alias.as_str().into(),
-                    thinking: m.thinking,
-                    vision: m.vision,
-                    audio: m.audio,
-                    video: m.video,
-                    tools: m.tools,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    window.set_prov_models(Rc::new(VecModel::from(rows)).into());
-}
-
-/// 远端清单 added 标记同步（当前提供商已含该 id）。
-fn remote_mark_added(window: &AppWindow, model_id: &str, added: bool) {
-    use slint::Model;
-    let list = window.get_remote_models();
-    let mut rows: Vec<RemoteRow> = (0..list.row_count())
-        .filter_map(|i| list.row_data(i))
-        .map(|r| RemoteRow {
-            added: if r.id == model_id { added } else { r.added },
-            ..r
-        })
-        .collect();
-    if rows.is_empty() {
-        return;
-    }
-    rows.sort_by(|a, b| {
-        (a.added, &a.id).cmp(&(b.added, &b.id)) // 未添加的排前，方便连续添加
-    });
-    window.set_remote_models(Rc::new(VecModel::from(rows)).into());
-}
-
-/// 行级模型改写的统一入口：读当前选中提供商 → 取/建该 model → 应用 f → upsert。
-/// 提供商被删/不可用则写 prov-status 并静默返回。
-/// `quiet` = 只落库不回刷 Slint 列表——逐字符的文本输入专用：
-/// 回刷会重建 for-delegate，正在敲字的 TextInput 随销毁丢焦点、布局抖动。
-fn model_upsert(
-    db: &Db,
-    window: &AppWindow,
-    model_id: &str,
-    quiet: bool,
-    f: impl FnOnce(&mut ModelInfo),
-) {
-    let sel = window.get_prov_sel().to_string();
-    let ps = match Providers::load(db) {
-        Ok(ps) => ps,
-        Err(e) => {
-            window.set_prov_status(format!("读取失败: {e}").into());
-            return;
-        }
-    };
-    let Some(entry) = ps.find(&sel).filter(|e| !e.deleted) else {
-        window.set_prov_status("提供商不可用，无法编辑模型".into());
-        return;
-    };
-    let mut m = entry
-        .models
-        .iter()
-        .find(|x| x.id == model_id)
-        .cloned()
-        .unwrap_or_else(|| ModelInfo {
-            id: model_id.to_string(),
-            ..Default::default()
-        });
-    f(&mut m);
-    if let Err(e) = Providers::upsert_model(db, &sel, m) {
-        window.set_prov_status(format!("模型保存失败: {e}").into());
-        return;
-    }
-    if !quiet {
-        let ps = Providers::load(db).unwrap_or_default();
-        prov_models_refresh(&ps, window);
-        remote_mark_added(window, model_id, true);
-    }
-}
-
-/// 「完成」：表单写回对应条目（kind/锁定族不信任 UI 传入）；密钥框非空才更新 `[keys]`。
-fn prov_save(db: &Db, window: &AppWindow) -> SharedString {
-    let id = window.get_prov_sel().to_string();
-    let ps = match Providers::load(db) {
-        Ok(ps) => ps,
-        Err(e) => return format!("读取失败: {e}").into(),
-    };
-    let Some(cur) = ps.find(&id).cloned() else {
-        return "条目不存在，请从列表重新选择".into();
-    };
-    if cur.deleted {
-        return "已删除条目：恢复后才能编辑".into();
-    }
-    let mut e = cur;
-    e.name = window.get_prov_name().trim().to_string();
-    if e.name.is_empty() {
-        e.name = e.kind.display_name().to_string();
-    }
-    e.base_url = window.get_prov_base().trim().to_string();
-    e.url_suffix = window.get_prov_suffix().trim().to_string();
-    e.api = match e.kind.locked_api() {
-        Some(locked) => Some(locked),
-        None => Some(api_of(window.get_prov_api())),
-    };
-    if e.kind == Provider::Custom && join_url(&e.base_url, &e.url_suffix).is_empty() {
-        return "自定义提供商必须填基础地址".into();
-    }
-    // models 不在表单保存里动（Step B：行级 upsert/remove 即时落盘）
-    if let Err(err) = Providers::save_entry(db, &e) {
-        return format!("保存失败: {err}").into();
-    }
-    let key = window.get_prov_key().trim().to_string();
-    if !key.is_empty() {
-        let mut secrets: Secrets = load_toml("config.toml").unwrap_or_default();
-        secrets.keys.insert(id.clone(), key);
-        if let Err(err) = store_toml(&secrets, "config.toml") {
-            return format!("设置已存，密钥写入失败: {err}").into();
-        }
-    }
-    prov_inject(db, window, &id);
-    "完成，已保存".into()
-}
-
-/// 用表单当前值（未保存也可测）组装临时视图；缺参则写 prov-status 回 `None`。
-fn prov_test_config(db: &Db, window: &AppWindow) -> Option<Config> {
-    let id = window.get_prov_sel().to_string();
-    let ps = Providers::load(db).ok()?;
-    let entry = ps.find(&id)?;
-    let kind = entry.kind;
-    let base_in = window.get_prov_base().trim().to_string();
-    let base = if base_in.is_empty() {
-        kind.default_base_url().unwrap_or("").to_string()
-    } else {
-        base_in
-    };
-    let full = join_url(&base, window.get_prov_suffix().trim());
-    if full.is_empty() {
-        window.set_prov_status("请先填写基础地址".into());
-        return None;
-    }
-    let key_in = window.get_prov_key().trim().to_string();
-    let key = if key_in.is_empty() {
-        load_toml::<Secrets>("config.toml")
-            .ok()
-            .and_then(|s| s.keys.get(&id).cloned())
-            .unwrap_or_default()
-    } else {
-        key_in
-    };
-    Some(Config {
-        provider: kind,
-        base_url: full,
-        api_key: key,
-        model: String::new(),
-        api: Some(
-            kind.locked_api()
-                .unwrap_or_else(|| api_of(window.get_prov_api())),
-        ),
-        stream: true,
-        models: Default::default(),
-    })
-}
+// —— 页面装配逻辑已下沉：models.rs / settings.rs / prov.rs ——
 
 /// UI 主入口：构建窗口、接线交互、运行 Slint 事件循环直到窗口关闭。
 ///
@@ -1131,21 +760,6 @@ pub fn run() -> Result<(), slint::PlatformError> {
     Ok(())
 }
 
-/// 当前提供商的模型 id → 是否支持思考（Step B 能力位的第一个消费点）。
-fn load_caps(db: &Db) -> BTreeMap<String, bool> {
-    Providers::load(db)
-        .ok()
-        .and_then(|ps| {
-            ps.active_entry().map(|e| {
-                e.models
-                    .iter()
-                    .map(|m| (m.id.clone(), m.thinking))
-                    .collect()
-            })
-        })
-        .unwrap_or_default()
-}
-
 /// 回收站列表重注入（侧栏按钮计数与浮层同源）。
 fn refresh_trash(db: &Db, window: &AppWindow) {
     let rows: Vec<TrashItem> = db
@@ -1173,19 +787,6 @@ fn persona_for_turn(db: &Db) -> Option<TurnPersona> {
         temperature: a.as_ref().and_then(|x| x.temperature),
     };
     (!p.is_empty()).then_some(p)
-}
-
-/// 温度文本 → `Option<f64>`：空 = 未设定（不发字段）；非数字或越界 0–2 回 `Err` 文案。
-fn parse_temperature(s: &str) -> Result<Option<f64>, String> {
-    let t = s.trim();
-    if t.is_empty() {
-        return Ok(None);
-    }
-    let v: f64 = t.parse().map_err(|_| "温度需为数字")?;
-    if !(0.0..=2.0).contains(&v) {
-        return Err("温度需在 0–2 之间".into());
-    }
-    Ok(Some(v))
 }
 
 /// 取（必要时懒建）客户端；`Err` 携带可直接展示的文案。
