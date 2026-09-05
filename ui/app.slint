@@ -159,12 +159,12 @@ export component AppWindow inherits Window {
         }
     }
     // if-block：每次打开重建 SettingsDialog 实例，表单初值即最新注入的 cfg-*
-    // 高度含角色设定区后按窗口收（小窗时表单尾部会裁切——弹窗滚动化留待交互打磨）
+    // 双列布局后单页内容变矮；高度仍按窗口收（小窗裁切留待弹窗滚动化打磨）
     if root.settings-open : Rectangle {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
-        width: 440px;
-        height: Math.min(700px, root.height - 24px);
+        width: 560px;
+        height: Math.min(440px, root.height - 24px);
         SettingsDialog {
             width: parent.width;
             height: parent.height;

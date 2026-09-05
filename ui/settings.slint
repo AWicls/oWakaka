@@ -1,5 +1,5 @@
-// 程序内设置弹窗：DB 设置（提供商/端点/密钥/激活模型）+ persona 角色设定
-// （助手提示词/用户人设/温度）的读写表单。
+// 程序内设置弹窗：左导航（界面/提供商/AI 助手/用户设定）+ 右内容分页。
+// 数据源：DB 设置 kv + persona 活跃行 + Theme 全局（界面页直改，即时生效）。
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
 import { TextEdit } from "std-widgets.slint";
@@ -115,8 +115,44 @@ component PromptRow inherits Rectangle {
     }
 }
 
+/// 左侧分类导航条目（列表式：选中高亮 + 左侧强调条）
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback picked();
+
+    height: 34px;
+    border-radius: 7px;
+    background: root.selected ? Theme.p.listActive
+            : (ta.has-hover ? Theme.p.listHover : transparent);
+    Rectangle {
+        visible: root.selected;
+        x: 0;
+        width: 3px;
+        y: (parent.height - self.height) / 2;
+        height: 18px;
+        border-radius: 2px;
+        background: Theme.p.accent;
+    }
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.selected ? Theme.p.textPrimary : Theme.p.textSecondary;
+        font-size: 13px;
+    }
+}
+
 /// 设置表单卡片：初值由 AppWindow 注入（打开时从 DB 设置 + persona 读取），
-/// 保存经回调交给 Rust 侧校验落盘，状态行回显成功/失败文案
+/// 保存经回调交给 Rust 侧校验落盘，状态行回显成功/失败文案。
+/// 左导航四分区：界面 | 提供商 | AI 助手 | 用户设定——各页是 if-block 实例，
+/// 切页即销毁重建，故所有编辑值存于 dialog 级 ed-* property（页面经 <=> 双向绑定）
 export component SettingsDialog inherits Rectangle {
     in property <int> init-provider; // 0 通用兼容 | 1 小米 MiMo（与 Rust 映射一致）
     in property <string> init-base-url;
@@ -129,7 +165,17 @@ export component SettingsDialog inherits Rectangle {
     callback saved(int, string, string, string, string, string, string);
     callback closed();
 
-    property <int> picked-provider: root.init-provider;
+    // 0 界面 | 1 提供商（默认：改配置主路径）| 2 AI 助手 | 3 用户设定
+    property <int> page: 1;
+
+    // 编辑态（跨页存续）：初值 = 注入的落盘配置
+    property <int> ed-provider: root.init-provider;
+    in-out property <string> ed-url: root.init-base-url;
+    in-out property <string> ed-key: root.init-api-key;
+    in-out property <string> ed-model: root.init-model;
+    in-out property <string> ed-system: root.init-system-prompt;
+    in-out property <string> ed-persona: root.init-user-persona;
+    in-out property <string> ed-temp: root.init-temperature;
 
     border-radius: 14px;
     border-width: 1px;
@@ -141,66 +187,145 @@ export component SettingsDialog inherits Rectangle {
         padding: 18px;
         spacing: 10px;
 
-        Text {
-            text: "设置";
-            color: Theme.p.textPrimary;
-            font-size: 16px;
-        }
-
-        Text {
-            text: "提供商";
-            color: Theme.p.textMuted;
-            font-size: 12px;
-        }
         HorizontalLayout {
-            spacing: 8px;
-            height: 30px;
-            Rectangle { horizontal-stretch: 1; }
-            Pill {
-                width: 120px;
-                label: "通用兼容";
-                selected: root.picked-provider == 0;
-                picked => { root.picked-provider = 0; }
-            }
-            Pill {
-                width: 120px;
-                label: "小米 MiMo";
-                selected: root.picked-provider == 1;
-                picked => { root.picked-provider = 1; }
-            }
-            Rectangle { horizontal-stretch: 1; }
-        }
+            spacing: 14px;
+            vertical-stretch: 1;
 
-        url-field := FieldRow {
-            label: "API 根地址（custom 必填；MiMo 留空 = 官方端点，写了 = 专属网关覆盖）";
-            text: root.init-base-url;
-            hint: "https://api.xiaomimimo.com/v1";
-        }
-        key-field := FieldRow {
-            label: "API 密钥（留空 = 保持已存值不变）";
-            text: root.init-api-key;
-            hint: "sk-...";
-        }
-        model-field := FieldRow {
-            label: "激活模型（模型下拉与请求携带的 model 字段）";
-            text: root.init-model;
-            hint: "mimo-v2.5";
-        }
+            // —— 左：分类导航 ——
+            VerticalLayout {
+                width: 104px;
+                spacing: 4px;
+                NavItem {
+                    label: "界面";
+                    selected: root.page == 0;
+                    picked => { root.page = 0; }
+                }
+                NavItem {
+                    label: "提供商";
+                    selected: root.page == 1;
+                    picked => { root.page = 1; }
+                }
+                NavItem {
+                    label: "AI 助手";
+                    selected: root.page == 2;
+                    picked => { root.page = 2; }
+                }
+                NavItem {
+                    label: "用户设定";
+                    selected: root.page == 3;
+                    picked => { root.page = 3; }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
 
-        sys-field := PromptRow {
-            label: "助手设定（system prompt：每次发送前置注入，留空 = 不发）";
-            text: root.init-system-prompt;
-            hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
-        }
-        persona-field := PromptRow {
-            label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
-            text: root.init-user-persona;
-            hint: "例如：资深 Rust 工程师，关注架构与成本";
-        }
-        temp-field := FieldRow {
-            label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
-            text: root.init-temperature;
-            hint: "0.7";
+            Rectangle {
+                width: 1px;
+                background: Theme.p.panelBorder;
+            }
+
+            // —— 右：当前分区内容 ——
+            VerticalLayout {
+                spacing: 10px;
+
+                if root.page == 0 : VerticalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "主题";
+                        color: Theme.p.textMuted;
+                        font-size: 12px;
+                    }
+                    Pill {
+                        label: "浅色";
+                        selected: Theme.mode == 0;
+                        picked => { Theme.mode = 0; }
+                    }
+                    Pill {
+                        label: "深色";
+                        selected: Theme.mode == 1;
+                        picked => { Theme.mode = 1; }
+                    }
+                    Pill {
+                        label: "跟随系统";
+                        selected: Theme.mode == 2;
+                        picked => { Theme.mode = 2; }
+                    }
+                    Text {
+                        text: "主题即时生效（与侧栏主题菜单同源）；暂不持久，重启回退跟随系统";
+                        color: Theme.p.textMuted;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+
+                if root.page == 1 : VerticalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "提供商";
+                        color: Theme.p.textMuted;
+                        font-size: 12px;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        height: 30px;
+                        Rectangle { horizontal-stretch: 1; }
+                        Pill {
+                            width: 120px;
+                            label: "通用兼容";
+                            selected: root.ed-provider == 0;
+                            picked => { root.ed-provider = 0; }
+                        }
+                        Pill {
+                            width: 120px;
+                            label: "小米 MiMo";
+                            selected: root.ed-provider == 1;
+                            picked => { root.ed-provider = 1; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    FieldRow {
+                        label: "API 根地址（custom 必填；MiMo 留空 = 官方端点，写了 = 专属网关覆盖）";
+                        text <=> root.ed-url;
+                        hint: "https://api.xiaomimimo.com/v1";
+                    }
+                    FieldRow {
+                        label: "API 密钥（留空 = 保持已存值不变）";
+                        text <=> root.ed-key;
+                        hint: "sk-...";
+                    }
+                    FieldRow {
+                        label: "激活模型（模型下拉与请求携带的 model 字段）";
+                        text <=> root.ed-model;
+                        hint: "mimo-v2.5";
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+
+                if root.page == 2 : VerticalLayout {
+                    spacing: 10px;
+                    PromptRow {
+                        label: "助手设定（system prompt：每次发送前置注入，留空 = 不发）";
+                        text <=> root.ed-system;
+                        hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
+                    }
+                    FieldRow {
+                        label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
+                        text <=> root.ed-temp;
+                        hint: "0.7";
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+
+                if root.page == 3 : VerticalLayout {
+                    spacing: 10px;
+                    PromptRow {
+                        label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
+                        text <=> root.ed-persona;
+                        hint: "例如：资深 Rust 工程师，关注架构与成本";
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
         }
 
         Text {
@@ -210,7 +335,6 @@ export component SettingsDialog inherits Rectangle {
             font-size: 12px;
             wrap: word-wrap;
         }
-        Rectangle { vertical-stretch: 1; }
 
         HorizontalLayout {
             spacing: 8px;
@@ -226,9 +350,8 @@ export component SettingsDialog inherits Rectangle {
                 label: "保存";
                 primary: true;
                 picked => {
-                    root.saved(root.picked-provider, url-field.text,
-                        key-field.text, model-field.text,
-                        sys-field.text, persona-field.text, temp-field.text);
+                    root.saved(root.ed-provider, root.ed-url, root.ed-key,
+                        root.ed-model, root.ed-system, root.ed-persona, root.ed-temp);
                 }
             }
         }
