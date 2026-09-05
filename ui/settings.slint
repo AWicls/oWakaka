@@ -3,7 +3,7 @@
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
 import { ScrollView, TextEdit } from "std-widgets.slint";
-import { Theme, Icon } from "theme.slint";
+import { Theme, Icon, Card } from "theme.slint";
 import { ModelItem } from "input.slint";
 
 /// 标签 + 单行输入框（空值时显示灰色提示）
@@ -529,12 +529,8 @@ export component SettingsPage inherits Rectangle {
             vertical-stretch: 1;
 
             // —— 左：分类导航卡（返回置顶；宽度随窗口收放） ——
-            Rectangle {
+            Card {
                 width: Math.max(104px, Math.min(150px, root.width * 0.14));
-                background: Theme.p.panelBg;
-                border-radius: 14px;
-                border-width: 1px;
-                border-color: Theme.p.panelBorder;
                 VerticalLayout {
                     padding: 8px;
                     spacing: 4px;
@@ -583,12 +579,8 @@ export component SettingsPage inherits Rectangle {
                 // if-block 子元素不自动占位：无此行则不随窗口撑满
                 horizontal-stretch: 1;
 
-                prov-list := Rectangle {
+                prov-list := Card {
                     width: Math.max(120px, Math.min(180px, root.width * 0.17));
-                    background: Theme.p.panelBg;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.p.panelBorder;
                     VerticalLayout {
                         padding: 8px;
                         spacing: 4px;
@@ -641,13 +633,8 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                Rectangle {
+                Card {
                     horizontal-stretch: 1;
-                    background: Theme.p.panelBg;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.p.panelBorder;
-                    clip: true;
                     VerticalLayout {
                         padding: 18px;
                         spacing: 10px;
@@ -947,12 +934,8 @@ export component SettingsPage inherits Rectangle {
                 // if-block 子元素不自动占位：无此行则不随窗口撑满
                 horizontal-stretch: 1;
 
-                Rectangle {
+                Card {
                     width: Math.max(120px, Math.min(180px, root.width * 0.17));
-                    background: Theme.p.panelBg;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.p.panelBorder;
                     VerticalLayout {
                         padding: 8px;
                         spacing: 4px;
@@ -976,13 +959,8 @@ export component SettingsPage inherits Rectangle {
                     }
                 }
 
-                Rectangle {
+                Card {
                     horizontal-stretch: 1;
-                    background: Theme.p.panelBg;
-                    border-radius: 14px;
-                    border-width: 1px;
-                    border-color: Theme.p.panelBorder;
-                    clip: true;
                     VerticalLayout {
                         padding: 18px;
                         spacing: 10px;
@@ -1160,13 +1138,8 @@ export component SettingsPage inherits Rectangle {
             }
 
             // —— 其余分区：单内容卡 ——
-            if root.page == 0 || root.page == 3 : Rectangle {
+            if root.page == 0 || root.page == 3 : Card {
                 horizontal-stretch: 1;
-                background: Theme.p.panelBg;
-                border-radius: 14px;
-                border-width: 1px;
-                border-color: Theme.p.panelBorder;
-                clip: true;
                 VerticalLayout {
                     padding: 18px;
                     spacing: 10px;

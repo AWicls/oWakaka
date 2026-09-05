@@ -5,7 +5,7 @@
 // 配色一律取自 theme.slint 的 Theme 全局（VS Code 现代深/浅双主题 + 跟随系统）。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icon } from "theme.slint";
+import { Theme, Icon, Card } from "theme.slint";
 import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
@@ -293,13 +293,8 @@ export component AppWindow inherits Window {
             spacing: 0;
 
             // 聊天卡片：吃满剩余高度；顶部助手头栏 44px，其下滚动区四周留白 8px
-            Rectangle {
+            Card {
                 vertical-stretch: 1;
-                background: Theme.p.panelBg;
-                border-radius: 14px;
-                border-width: 1px;
-                border-color: Theme.p.panelBorder;
-                clip: true;
 
                 // 当前会话助手：圆形头像（有图盖图，无图色板圆底+首字）+ 名称。
                 // layout 在非布局父级里定高会被求解器垂直居中 → 显式钉到顶部
@@ -428,16 +423,11 @@ export component AppWindow inherits Window {
             clicked => { root.trash-closed(); }
         }
     }
-    if root.trash-open : Rectangle {
+    if root.trash-open : Card {
         x: (root.width - self.width) / 2;
         y: root.caption-height + (root.content-height - self.height) / 2;
         width: Math.min(400px, root.width - 60px);
         height: Math.min(420px, root.content-height - 40px);
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.p.panelBorder;
-        background: Theme.p.panelBg;
-        clip: true;
         VerticalLayout {
             padding: 18px;
             spacing: 10px;

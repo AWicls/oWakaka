@@ -251,3 +251,14 @@ export component Icon inherits Rectangle {
         commands: "M4,4 L12,12 M12,4 L4,12";
     }
 }
+
+/// 卡片外框：面板底色 + 14px 圆角 + 主题描边 + 裁剪。
+/// 设置页各卡与浮层卡的通用容器；使用方只需再给尺寸（width/stretch/x/y）与子元素。
+/// 继承 Rectangle 且根属性对外可设（同 SessionSidebar 用法），子元素落到本框内。
+export component Card inherits Rectangle {
+    background: Theme.p.panelBg;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: Theme.p.panelBorder;
+    clip: true;
+}
