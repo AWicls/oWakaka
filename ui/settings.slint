@@ -304,8 +304,8 @@ component CapChip inherits Rectangle {
     }
 }
 
-/// 模型管理行：默认单行显示（别名或请求ID + 能力摘要），点「编辑」展开
-/// 别名输入与能力勾选；「−」移除。编辑态由外层 mdl-edit 驱动（同屏仅一行）
+/// 模型管理行：两行常显——名称行（别名优先，请求 ID 灰色后缀，「别名」编辑钮 + 「−」）
+/// + 能力行（胶囊直接勾选）。点「别名」仅把名称行切成输入态。
 component ModelCard inherits Rectangle {
     in property <ModelRow> mdl;
     in property <bool> editing;
@@ -315,19 +315,18 @@ component ModelCard inherits Rectangle {
     callback edit-requested();
     callback edit-done();
 
-    height: root.editing ? 62px : 30px;
+    height: 58px;
     border-radius: 6px;
-    background: root.editing ? Theme.p.windowBg : transparent;
+    background: transparent;
     VerticalLayout {
         padding: 3px;
         spacing: 2px;
         HorizontalLayout {
             height: 24px;
             spacing: 6px;
-            // —— 查看态标题 / 编辑态别名输入 ——
+            // —— 名称行：查看态（别名优先，无别名显示 ID） ——
             Text {
                 visible: !root.editing;
-                horizontal-stretch: 1;
                 text: root.mdl.alias != "" ? root.mdl.alias : root.mdl.id;
                 color: Theme.p.textPrimary;
                 font-size: 12px;
@@ -373,21 +372,14 @@ component ModelCard inherits Rectangle {
                 overflow: elide;
                 vertical-alignment: center;
             }
-            Text {
+            Rectangle {
                 visible: !root.editing;
-                text: (root.mdl.thinking ? "思考 " : "")
-                    + (root.mdl.vision ? "图片 " : "")
-                    + (root.mdl.audio ? "语音 " : "")
-                    + (root.mdl.video ? "视频 " : "")
-                    + (root.mdl.tools ? "工具" : "");
-                color: Theme.p.link;
-                font-size: 11px;
-                vertical-alignment: center;
+                horizontal-stretch: 1;
             }
             Pill {
                 visible: !root.editing;
                 width: 46px;
-                label: "编辑";
+                label: "别名";
                 picked => { root.edit-requested(); }
             }
             Pill {
@@ -403,8 +395,8 @@ component ModelCard inherits Rectangle {
                 picked => { root.remove-request(); }
             }
         }
+        // —— 能力行：常显直切 ——
         HorizontalLayout {
-            visible: root.editing;
             height: 22px;
             spacing: 4px;
             CapChip {
