@@ -698,20 +698,19 @@ export component SettingsPage inherits Rectangle {
                                     font-size: 13px;
                                 }
 
-                                // —— Step B/C：模型管理（列表随内容增高，滚动统一交给外层主体） ——
-                                // stretch 归零：高窗富余高度全给尾部 filler，模型框/按钮行按内容上靠
+                                // —— Step B/C：模型管理 ——
+                                // 模型框是弹性区：最少两行、最大吃满富余高（框内自滚），
+                                // 其余元素恒全显；窗口矮于内容最小高时外层 ScrollView 才可滚
                                 if root.prov-sel != "" && !root.sel-deleted : VerticalLayout {
-                                    vertical-stretch: 0;
                                     spacing: 6px;
                                     Text {
                                         text: "可用模型";
                                         color: Theme.p.textMuted;
                                         font-size: 12px;
                                     }
-                                    // 框高封顶 300px（约 5 行），超出部分框内 ScrollView 自滚
-                                    //（Rectangle preferred 不反推子 layout，高度须显式算：行高 58+间距 2）
                                     Rectangle {
-                                        height: Math.max(90px, Math.min(root.prov-models.length * 60px + 8px, 300px));
+                                        min-height: 128px; // 两行模型（58 行高+2 间距+padding）
+                                        vertical-stretch: 1;
                                         border-radius: 8px;
                                         border-width: 1px;
                                         border-color: Theme.p.inputBorder;
@@ -865,8 +864,9 @@ export component SettingsPage inherits Rectangle {
                                     font-size: 12px;
                                     wrap: word-wrap;
                                 }
-                                // 惰性尾部 filler：viewport 高于内容时独吞富余高（内容超高时归零不影响滚动）
-                                Rectangle { vertical-stretch: 1; }
+                                // 尾部 filler 仅在模型区隐藏时补位（防定高子项摊开）；
+                                // 模型区可见时富余高归模型框独吞
+                                if root.prov-sel == "" || root.sel-deleted : Rectangle { vertical-stretch: 1; }
                             }
                         }
 
