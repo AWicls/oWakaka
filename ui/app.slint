@@ -29,6 +29,12 @@ export component AppWindow inherits Window {
     in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
     in property <string> model-label; // 当前激活模型显示名
     in property <bool> settings-page; // 设置整页开关（true = 显示设置页，主三框整体切换）
+    // 主题持久化桥：Rust 经此属性读写（kv "ui"），双向链到 Theme 全局；
+    // 侧栏菜单/设置页仍直接改 Theme.mode，即时生效同一条链
+    in-out property <int> ui-theme <=> Theme.mode;
+    callback theme-changed(int); // ui-theme 变动 → Rust 落库 kv "ui"
+
+    changed ui-theme => { root.theme-changed(root.ui-theme); }
     // —— 提供商页状态（providers 整包视图；Rust 注入/回注，密钥不下 UI） ——
     in property <[ProvRow]> provs;
     in-out property <string> prov-sel;

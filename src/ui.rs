@@ -435,6 +435,24 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.set_messages(host.active_model().into());
     window.set_thinking_on(host.thinking_on.get());
 
+    // 主题恢复：kv("ui") {"theme":0|1|2} → 双向链进 Theme 全局
+    if let Ok(Some(json)) = db.kv_get("ui") {
+        if let Some(v) = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|j| j.get("theme").and_then(serde_json::Value::as_i64))
+        {
+            window.set_ui_theme(v as i32);
+        }
+    }
+    {
+        let db = db.clone();
+        window.on_theme_changed(move |mode| {
+            if let Err(e) = db.kv_set("ui", &format!("{{\"theme\":{mode}}}")) {
+                eprintln!("主题持久化失败: {e}");
+            }
+        });
+    }
+
     let models = ModelsState::from_config(db.clone());
     models.apply(&window);
 
