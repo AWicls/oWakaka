@@ -1,4 +1,4 @@
-// oWakaka P0 对话壳装配层：AppWindow 无边框窗口（no-frame）+ 自绘标题栏（左上角三键），
+// oWakaka P0 对话壳装配层：AppWindow 无边框窗口（no-frame）+ 自绘标题栏（右上角三键），
 // 其下三框布局——左会话栏（session.slint，可拖宽）| 右上对话区（bubble.slint 气泡）
 // | 右下输入区（input.slint，可拖高）。拖拽条见 splitter.slint；
 // ChatMessage/SessionItem 在此统一再导出供 Rust 消费。
@@ -149,7 +149,8 @@ component CaptionBtn inherits Rectangle {
     }
 }
 
-/// 顶部 34px 标题栏：左三键（关闭/最大化·还原/最小化，关闭贴角）+ 拖拽区（按下发起原生拖窗，双击切最大化）
+/// 顶部 34px 标题栏：拖拽区（按下发起原生拖窗，双击切最大化）+ 右三键
+///（Windows 惯例序：最小化/最大化·还原/关闭，关闭贴右角）
 component CaptionBar inherits Rectangle {
     in property <bool> is-maximized;
     callback win-minimize();
@@ -160,19 +161,6 @@ component CaptionBar inherits Rectangle {
     background: Theme.p.windowBg;
     HorizontalLayout {
         spacing: 0px;
-        CaptionBtn {
-            icon: CaptionIcon.close;
-            danger: true;
-            picked => { root.win-close(); }
-        }
-        CaptionBtn {
-            icon: root.is-maximized ? CaptionIcon.restore : CaptionIcon.maximize;
-            picked => { root.win-maximize(); }
-        }
-        CaptionBtn {
-            icon: CaptionIcon.minimize;
-            picked => { root.win-minimize(); }
-        }
         Rectangle {
             horizontal-stretch: 1;
             TouchArea {
@@ -194,6 +182,19 @@ component CaptionBar inherits Rectangle {
                 color: Theme.p.textMuted;
                 font-size: 12px;
             }
+        }
+        CaptionBtn {
+            icon: CaptionIcon.minimize;
+            picked => { root.win-minimize(); }
+        }
+        CaptionBtn {
+            icon: root.is-maximized ? CaptionIcon.restore : CaptionIcon.maximize;
+            picked => { root.win-maximize(); }
+        }
+        CaptionBtn {
+            icon: CaptionIcon.close;
+            danger: true;
+            picked => { root.win-close(); }
         }
     }
 }
