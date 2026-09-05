@@ -159,4 +159,20 @@ export component Icon inherits Rectangle {
         stroke: transparent;
         commands: "M6.6,4.5 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0 M10.1,8 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0 M5.4,11.5 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0";
     }
+    // 左箭头（返回）：V 头 + 横线（描边）
+    Path {
+        visible: root.which == 6;
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.ink;
+        stroke-width: 1.6px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        fill: transparent;
+        commands: "M9.5,3.5 L5,8 L9.5,12.5 M5,8 H13.5";
+    }
 }

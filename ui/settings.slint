@@ -1,9 +1,9 @@
-// 程序内设置弹窗：左导航（界面/提供商/AI 助手/用户设定）+ 右内容分页。
+// 程序内设置整页（与对话界面切换）：左导航（界面/提供商/AI 助手/用户设定）+ 右内容卡片。
 // 数据源：DB 设置 kv + persona 活跃行 + Theme 全局（界面页直改，即时生效）。
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
 import { TextEdit } from "std-widgets.slint";
-import { Theme } from "theme.slint";
+import { Theme, Icon } from "theme.slint";
 
 /// 标签 + 单行输入框（空值时显示灰色提示）
 component FieldRow inherits Rectangle {
@@ -149,11 +149,51 @@ component NavItem inherits Rectangle {
     }
 }
 
-/// 设置表单卡片：初值由 AppWindow 注入（打开时从 DB 设置 + persona 读取），
-/// 保存经回调交给 Rust 侧校验落盘，状态行回显成功/失败文案。
-/// 左导航四分区：界面 | 提供商 | AI 助手 | 用户设定——各页是 if-block 实例，
-/// 切页即销毁重建，故所有编辑值存于 dialog 级 ed-* property（页面经 <=> 双向绑定）
-export component SettingsDialog inherits Rectangle {
+/// 返回钮（设置页顶栏）：左箭头图标 + 文字，描边胶囊与整体卡片语汇一致
+component BackButton inherits Rectangle {
+    callback clicked();
+
+    width: 88px;
+    height: 34px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.p.inputBorder;
+    background: ta.has-hover ? Theme.p.listHover : Theme.p.panelBg;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding: 10px;
+        spacing: 6px;
+        // Rectangle 随布局吃满行高，Icon 定高居中（Slint 布局对固定高元素不垂直居中）
+        Rectangle {
+            width: 16px;
+            Icon {
+                x: 0;
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                which: 6;
+                ink: Theme.p.textSecondary;
+            }
+        }
+        Text {
+            text: "返回";
+            color: Theme.p.textPrimary;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+/// 全屏设置页（与对话界面整页切换）：顶栏返回 + 左导航四分区 + 右内容卡片。
+/// 初值由 AppWindow 注入（打开时从 DB 设置 + persona 读取），保存经回调交 Rust
+/// 校验落盘，状态行回显成功/失败；返回 = 放弃未保存编辑（页面销毁即重置）。
+/// 各分区页是 if-block 实例，切页销毁重建，编辑值存于页面级 ed-* property（<=> 绑定）
+export component SettingsPage inherits Rectangle {
     in property <int> init-provider; // 0 通用兼容 | 1 小米 MiMo（与 Rust 映射一致）
     in property <string> init-base-url;
     in property <string> init-api-key;
@@ -163,7 +203,7 @@ export component SettingsDialog inherits Rectangle {
     in property <string> init-temperature; // 温度（空 = 未设定）
     in property <string> status;
     callback saved(int, string, string, string, string, string, string);
-    callback closed();
+    callback back();
 
     // 0 界面 | 1 提供商（默认：改配置主路径）| 2 AI 助手 | 3 用户设定
     property <int> page: 1;
@@ -177,55 +217,86 @@ export component SettingsDialog inherits Rectangle {
     in-out property <string> ed-persona: root.init-user-persona;
     in-out property <string> ed-temp: root.init-temperature;
 
-    border-radius: 14px;
-    border-width: 1px;
-    border-color: Theme.p.panelBorder;
-    background: Theme.p.panelBg;
+    background: Theme.p.windowBg;
     clip: true;
 
     VerticalLayout {
-        padding: 18px;
-        spacing: 10px;
+        padding: 14px;
+        spacing: 12px;
+
+        // —— 顶栏：返回 + 页题 ——
+        HorizontalLayout {
+            height: 34px;
+            spacing: 10px;
+            BackButton {
+                clicked => { root.back(); }
+            }
+            Text {
+                text: "设置";
+                color: Theme.p.textPrimary;
+                font-size: 16px;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
 
         HorizontalLayout {
-            spacing: 14px;
+            spacing: 10px;
             vertical-stretch: 1;
 
-            // —— 左：分类导航 ——
-            VerticalLayout {
-                width: 104px;
-                spacing: 4px;
-                NavItem {
-                    label: "界面";
-                    selected: root.page == 0;
-                    picked => { root.page = 0; }
-                }
-                NavItem {
-                    label: "提供商";
-                    selected: root.page == 1;
-                    picked => { root.page = 1; }
-                }
-                NavItem {
-                    label: "AI 助手";
-                    selected: root.page == 2;
-                    picked => { root.page = 2; }
-                }
-                NavItem {
-                    label: "用户设定";
-                    selected: root.page == 3;
-                    picked => { root.page = 3; }
-                }
-                Rectangle { vertical-stretch: 1; }
-            }
-
+            // —— 左：分类导航卡（与对话面板同款圆角描边）——
             Rectangle {
-                width: 1px;
-                background: Theme.p.panelBorder;
+                width: 148px;
+                background: Theme.p.panelBg;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: Theme.p.panelBorder;
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 4px;
+                    NavItem {
+                        label: "界面";
+                        selected: root.page == 0;
+                        picked => { root.page = 0; }
+                    }
+                    NavItem {
+                        label: "提供商";
+                        selected: root.page == 1;
+                        picked => { root.page = 1; }
+                    }
+                    NavItem {
+                        label: "AI 助手";
+                        selected: root.page == 2;
+                        picked => { root.page = 2; }
+                    }
+                    NavItem {
+                        label: "用户设定";
+                        selected: root.page == 3;
+                        picked => { root.page = 3; }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
             }
 
-            // —— 右：当前分区内容 ——
-            VerticalLayout {
-                spacing: 10px;
+            // —— 右：当前分区内容卡 ——
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Theme.p.panelBg;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: Theme.p.panelBorder;
+                clip: true;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 10px;
+
+                    Text {
+                        text: root.page == 0 ? "界面"
+                            : root.page == 1 ? "提供商"
+                            : root.page == 2 ? "AI 助手设定" : "用户设定";
+                        color: Theme.p.textPrimary;
+                        font-size: 14px;
+                    }
 
                 if root.page == 0 : VerticalLayout {
                     spacing: 10px;
@@ -234,20 +305,29 @@ export component SettingsDialog inherits Rectangle {
                         color: Theme.p.textMuted;
                         font-size: 12px;
                     }
-                    Pill {
-                        label: "浅色";
-                        selected: Theme.mode == 0;
-                        picked => { Theme.mode = 0; }
-                    }
-                    Pill {
-                        label: "深色";
-                        selected: Theme.mode == 1;
-                        picked => { Theme.mode = 1; }
-                    }
-                    Pill {
-                        label: "跟随系统";
-                        selected: Theme.mode == 2;
-                        picked => { Theme.mode = 2; }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        height: 30px;
+                        Rectangle { horizontal-stretch: 1; }
+                        Pill {
+                            width: 110px;
+                            label: "浅色";
+                            selected: Theme.mode == 0;
+                            picked => { Theme.mode = 0; }
+                        }
+                        Pill {
+                            width: 110px;
+                            label: "深色";
+                            selected: Theme.mode == 1;
+                            picked => { Theme.mode = 1; }
+                        }
+                        Pill {
+                            width: 130px;
+                            label: "跟随系统";
+                            selected: Theme.mode == 2;
+                            picked => { Theme.mode = 2; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                     Text {
                         text: "主题即时生效（与侧栏主题菜单同源）；暂不持久，重启回退跟随系统";
@@ -325,6 +405,7 @@ export component SettingsDialog inherits Rectangle {
                     }
                     Rectangle { vertical-stretch: 1; }
                 }
+                }
             }
         }
 
@@ -341,12 +422,7 @@ export component SettingsDialog inherits Rectangle {
             height: 30px;
             Rectangle { horizontal-stretch: 1; }
             Pill {
-                width: 72px;
-                label: "取消";
-                picked => { root.closed(); }
-            }
-            Pill {
-                width: 72px;
+                width: 88px;
                 label: "保存";
                 primary: true;
                 picked => {

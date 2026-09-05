@@ -173,7 +173,7 @@ impl ModelsState {
     }
 }
 
-/// 设置弹窗保存：设置字段（stream/api/[models] 等原样保留）+ 角色设定
+/// 设置页保存：设置字段（stream/api/[models] 等原样保留）+ 角色设定
 /// （助手提示词/温度、用户人设 → persona 活跃行）；校验不过不落盘；
 /// 成功则失效客户端缓存并同步模型下拉（允许重拉远端清单）
 // 参数 = Slint saved 回调直传 + 共享状态，拆包反而绕
@@ -403,7 +403,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // —— 设置弹窗：打开注入 config 初值；保存=校验落盘 + 失效客户端缓存 + 同步模型态 ——
+    // —— 设置整页：进入注入 config 初值；保存=校验落盘 + 失效客户端缓存 + 同步模型态 ——
     {
         window.on_settings_requested({
             let window_weak = window.as_weak();
@@ -413,7 +413,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                // 读不到配置也照常开弹窗（字段空白），保存时报错引导
+                // 读不到配置也照常进设置页（字段空白），保存时报错引导
                 if let Ok(cfg) = Config::load(&db) {
                     w.set_cfg_provider(if cfg.provider == Provider::XiaomiMimo {
                         1
@@ -439,14 +439,14 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     w.set_cfg_user_persona(u.system_prompt.into());
                 }
                 w.set_cfg_status(SharedString::default());
-                w.set_settings_open(true);
+                w.set_settings_page(true);
             }
         });
-        window.on_settings_closed({
+        window.on_settings_back({
             let window_weak = window.as_weak();
             move || {
                 if let Some(w) = window_weak.upgrade() {
-                    w.set_settings_open(false);
+                    w.set_settings_page(false);
                 }
             }
         });
@@ -473,9 +473,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     &w,
                 );
                 w.set_cfg_status(status.clone());
-                if status.starts_with("已保存") {
-                    w.set_settings_open(false);
-                }
+                // 整页设置不自动跳回，留在本页回显成功/失败；用户点「返回」退出
             }
         });
     }
