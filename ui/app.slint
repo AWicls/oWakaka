@@ -9,10 +9,10 @@ import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
 import { InputArea, ModelItem } from "input.slint";
-import { SettingsPage, ProvRow } from "settings.slint";
+import { SettingsPage, ProvRow, ModelRow, RemoteRow } from "settings.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct
-export { ChatMessage, SessionItem, ModelItem, ProvRow }
+export { ChatMessage, SessionItem, ModelItem, ProvRow, ModelRow, RemoteRow }
 
 export component AppWindow inherits Window {
     title: "oWakaka";
@@ -41,8 +41,17 @@ export component AppWindow inherits Window {
     in property <bool> sel-locked;
     in property <bool> sel-active;
     in property <bool> sel-deleted;
-    in-out property <string> prov-aliases;
     in property <string> prov-status;
+    // —— Step B：模型管理（当前提供商模型 + 远端拉取清单） ——
+    in property <[ModelRow]> prov-models;
+    in property <[RemoteRow]> remote-models;
+    in property <bool> remote-loading;
+    callback prov-fetch();                 // 拉取远端 /models（用表单当前值）
+    callback prov-model-added(string);     // 从远端 ＋ 添加
+    callback prov-model-custom(string, string); // 自定义 id + 别名
+    callback prov-model-alias(string, string);  // 改别名
+    callback prov-model-cap(string, int, bool); // 改能力位（0思考1视觉2语音3视频4工具）
+    callback prov-model-removed(string);   // 移除模型
     callback prov-created(int);
     callback prov-selected(string);
     callback prov-used();
@@ -177,8 +186,16 @@ export component AppWindow inherits Window {
         sel-locked: root.sel-locked;
         sel-active: root.sel-active;
         sel-deleted: root.sel-deleted;
-        prov-aliases <=> root.prov-aliases;
         prov-status: root.prov-status;
+        prov-models: root.prov-models;
+        remote-models: root.remote-models;
+        remote-loading: root.remote-loading;
+        prov-fetch => { root.prov-fetch(); }
+        prov-model-added(id) => { root.prov-model-added(id); }
+        prov-model-custom(id, alias) => { root.prov-model-custom(id, alias); }
+        prov-model-alias(id, alias) => { root.prov-model-alias(id, alias); }
+        prov-model-cap(id, cap, on) => { root.prov-model-cap(id, cap, on); }
+        prov-model-removed(id) => { root.prov-model-removed(id); }
         prov-created(k) => { root.prov-created(k); }
         prov-selected(id) => { root.prov-selected(id); }
         prov-used => { root.prov-used(); }

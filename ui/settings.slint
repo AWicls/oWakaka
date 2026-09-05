@@ -2,7 +2,7 @@
 // 数据源：DB 设置 kv + persona 活跃行 + Theme 全局（界面页直改，即时生效）。
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
-import { TextEdit } from "std-widgets.slint";
+import { ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme, Icon } from "theme.slint";
 
 /// 标签 + 单行输入框（空值时显示灰色提示）
@@ -258,6 +258,138 @@ export struct ProvRow {
     deleted: bool,      // 逻辑删除（灰显）
 }
 
+/// 模型管理行：当前提供商已配置的模型（含能力位）
+export struct ModelRow {
+    id: string,
+    alias: string,
+    thinking: bool,
+    vision: bool,
+    audio: bool,
+    video: bool,
+    tools: bool,
+}
+
+/// 远端拉取到的模型（added = 本提供商已收录）
+export struct RemoteRow {
+    id: string,
+    added: bool,
+}
+
+/// 能力开关胶囊（点击切换；选中态强调色）
+component CapChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback toggled();
+
+    height: 22px;
+    width: lbl.preferred-width + 16px;
+    border-radius: 11px;
+    border-width: 1px;
+    border-color: root.on ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
+    background: root.on ? Theme.p.accentSoftBg : transparent;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+    lbl := Text {
+        x: 8px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.on ? Theme.p.link : Theme.p.textMuted;
+        font-size: 11px;
+    }
+}
+
+/// 模型管理卡中的一行：别名输入 + 能力胶囊 + id 展示 + 移除
+component ModelCard inherits Rectangle {
+    in property <ModelRow> mdl;
+    callback alias-changed(string);
+    callback cap(int, bool);
+    callback remove-request();
+
+    height: 60px;
+    border-radius: 6px;
+    background: transparent;
+    VerticalLayout {
+        padding: 3px;
+        spacing: 3px;
+        HorizontalLayout {
+            height: 24px;
+            spacing: 6px;
+            Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 5px;
+                border-width: 1px;
+                border-color: Theme.p.inputBorder;
+                background: Theme.p.windowBg;
+                ti := TextInput {
+                    x: 6px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - 12px;
+                    single-line: true;
+                    font-size: 12px;
+                    color: Theme.p.textPrimary;
+                    selection-background-color: Theme.p.accentSoftBg;
+                    text: root.mdl.alias;
+                    edited => { root.alias-changed(ti.text); }
+                }
+                Text {
+                    visible: ti.text == "";
+                    x: 6px;
+                    y: (parent.height - self.height) / 2;
+                    text: "显示别名（留空 = 原样显示 ID）";
+                    color: Theme.p.textMuted;
+                    font-size: 12px;
+                }
+            }
+            Pill {
+                width: 30px;
+                label: "✕";
+                picked => { root.remove-request(); }
+            }
+        }
+        HorizontalLayout {
+            height: 22px;
+            spacing: 4px;
+            CapChip {
+                label: "思考";
+                on: root.mdl.thinking;
+                toggled => { root.cap(0, !root.mdl.thinking); }
+            }
+            CapChip {
+                label: "图片";
+                on: root.mdl.vision;
+                toggled => { root.cap(1, !root.mdl.vision); }
+            }
+            CapChip {
+                label: "语音";
+                on: root.mdl.audio;
+                toggled => { root.cap(2, !root.mdl.audio); }
+            }
+            CapChip {
+                label: "视频";
+                on: root.mdl.video;
+                toggled => { root.cap(3, !root.mdl.video); }
+            }
+            CapChip {
+                label: "工具";
+                on: root.mdl.tools;
+                toggled => { root.cap(4, !root.mdl.tools); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.mdl.id;
+                color: Theme.p.textMuted;
+                font-size: 11px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 /// 全屏设置页：顶栏返回 + 左导航四分区。提供商页 = 列表卡 + 详情卡，
 /// 字段以 Rust 侧 providers 整包为真相源（in-out 双向链，操作即时回注）；
 /// persona 两页存页面级 ed-* 编辑态，底部「保存」一次性提交。
@@ -274,10 +406,19 @@ export component SettingsPage inherits Rectangle {
     in property <string> sel-kind;          // 当前条目厂商显示名
     in property <bool> sel-locked;          // 定制提供商：接口族锁定
     in property <bool> sel-active;          // 当前条目 = 使用中
-    in property <bool> sel-deleted;         // 当前条目已逻辑删除
-    in-out property <string> prov-aliases;  // 别名多行文本（每行 id=显示名）
-    in property <string> prov-status;       // 提供商页状态行（测试/保存回显）
-    callback prov-created(int);             // 新增菜单选择：0 通用兼容 | 1 小米 MiMo
+    in property <bool> sel-deleted;        // 当前条目已逻辑删除
+    in property <string> prov-status;      // 提供商页状态行（测试/保存回显）
+    // —— Step B：模型管理 ——
+    in property <[ModelRow]> prov-models;
+    in property <[RemoteRow]> remote-models;
+    in property <bool> remote-loading;
+    callback prov-fetch();
+    callback prov-model-added(string);
+    callback prov-model-custom(string, string);
+    callback prov-model-alias(string, string);
+    callback prov-model-cap(string, int, bool);
+    callback prov-model-removed(string);
+    callback prov-created(int);            // 新增菜单选择：0 通用兼容 | 1 小米 MiMo
     callback prov-selected(string);         // 点列表项 → Rust 回注详情
     callback prov-used();                   // 使用此提供商
     callback prov-saved();                  // 完成（表单写回条目 + 密钥）
@@ -297,6 +438,7 @@ export component SettingsPage inherits Rectangle {
     // 0 界面 | 1 提供商（默认：改配置主路径）| 2 AI 助手 | 3 用户设定
     property <int> page: 1;
     property <bool> add-menu: false;        // 新增提供商弹层
+    property <bool> remote-open: false;     // 远端模型清单弹层（拉取按钮开启，遮罩关闭）
 
     // 编辑态（persona 字段跨页存续）：初值 = 注入的落盘配置
     in-out property <string> ed-system: root.init-system-prompt;
@@ -467,10 +609,85 @@ export component SettingsPage inherits Rectangle {
                             font-size: 13px;
                         }
 
-                        if root.prov-sel != "" : PromptRow {
-                            label: "可用模型别名（每行一条：模型ID=显示名；别名可省）";
-                            text <=> root.prov-aliases;
-                            hint: "gpt-4o=主力\nmimo-v2.5";
+                        // —— Step B：模型管理 ——
+                        if root.prov-sel != "" && !root.sel-deleted : VerticalLayout {
+                            spacing: 6px;
+                            height: 250px;
+                            Text {
+                                text: "可用模型（拉远端 / 自定义；勾选能力，Step C 起生效）";
+                                color: Theme.p.textMuted;
+                                font-size: 12px;
+                            }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                height: 26px;
+                                custom-id := TextInput {
+                                    width: 160px;
+                                    height: 26px;
+                                    font-size: 12px;
+                                    single-line: true;
+                                    color: Theme.p.textPrimary;
+                                    horizontal-stretch: 1;
+                                }
+                                custom-alias := TextInput {
+                                    width: 110px;
+                                    height: 26px;
+                                    font-size: 12px;
+                                    single-line: true;
+                                    color: Theme.p.textPrimary;
+                                }
+                                Pill {
+                                    width: 56px;
+                                    label: "自定义+";
+                                    picked => {
+                                        root.prov-model-custom(custom-id.text, custom-alias.text);
+                                        custom-id.text = "";
+                                        custom-alias.text = "";
+                                    }
+                                }
+                                Pill {
+                                    width: 84px;
+                                    label: "拉取远端";
+                                    selected: root.remote-loading;
+                                    picked => {
+                                        root.remote-open = true;
+                                        root.prov-fetch();
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.p.inputBorder;
+                                background: Theme.p.windowBg;
+                                clip: true;
+                                if root.prov-models.length == 0 : Text {
+                                    text: "还没有模型，用上方输入或「拉取远端」添加。";
+                                    color: Theme.p.textMuted;
+                                    font-size: 12px;
+                                    x: 8px;
+                                    y: 8px;
+                                    wrap: word-wrap;
+                                    width: parent.width - 16px;
+                                }
+                                ScrollView {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    viewport-width: self.visible-width;
+                                    vertical-scrollbar-policy: always-on;
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        spacing: 2px;
+                                        for m in root.prov-models : ModelCard {
+                                            mdl: m;
+                                            alias-changed(a) => { root.prov-model-alias(m.id, a); }
+                                            cap(which, on) => { root.prov-model-cap(m.id, which, on); }
+                                            remove-request => { root.prov-model-removed(m.id); }
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         Text {
@@ -669,6 +886,98 @@ export component SettingsPage inherits Rectangle {
                 picked => {
                     root.add-menu = false;
                     root.prov-created(1);
+                }
+            }
+        }
+    }
+
+    // —— 远端模型清单弹层：＋收录；已收录 ✓ 灰显（遮罩关闭） ——
+    if root.remote-open : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        TouchArea {
+            clicked => { root.remote-open = false; }
+        }
+    }
+    if root.remote-open : Rectangle {
+        x: Math.min(root.width - 340px, 14px + 148px + 10px + 160px + 10px + 24px);
+        y: 120px;
+        width: 320px;
+        height: 400px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.p.inputBorder;
+        background: Theme.p.panelBg;
+        clip: true;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            HorizontalLayout {
+                height: 24px;
+                spacing: 8px;
+                Text {
+                    text: "远端模型清单";
+                    color: Theme.p.textPrimary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Pill {
+                    width: 56px;
+                    label: "关闭";
+                    picked => { root.remote-open = false; }
+                }
+            }
+            if root.remote-loading : Text {
+                text: "拉取中…（改地址/密钥后请重开设置再拉）";
+                color: Theme.p.textMuted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            if !root.remote-loading && root.remote-models.length == 0 : Text {
+                text: "暂无清单：点「拉取远端」按当前表单的端点与密钥请求 /models。";
+                color: Theme.p.textMuted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.p.inputBorder;
+                background: Theme.p.windowBg;
+                clip: true;
+                ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: self.visible-width;
+                    vertical-scrollbar-policy: always-on;
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 2px;
+                        for r in root.remote-models : HorizontalLayout {
+                            height: 26px;
+                            spacing: 6px;
+                            Text {
+                                text: r.id;
+                                horizontal-stretch: 1;
+                                color: r.added ? Theme.p.textMuted : Theme.p.textPrimary;
+                                font-size: 12px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            Pill {
+                                width: 44px;
+                                label: r.added ? "✓" : "＋";
+                                selected: !r.added;
+                                picked => {
+                                    if !r.added { root.prov-model-added(r.id); }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

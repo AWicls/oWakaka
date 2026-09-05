@@ -41,10 +41,10 @@ use crate::ai::{
     client::{Client, TurnEvent, TurnOptions, TurnPersona},
     config::{Api, Config, Secrets, load_toml, store_toml},
     provider::Provider,
-    providers::{Providers, fmt_aliases, join_url, parse_aliases},
+    providers::{ModelInfo, Providers, join_url},
 };
 use crate::db::Db;
-use slint::{SharedString, Timer, TimerMode, VecModel};
+use slint::{Model, SharedString, Timer, TimerMode, VecModel};
 
 use bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history};
 use host::{Host, RunRef, StreamMsg};
@@ -57,11 +57,12 @@ slint::include_modules!();
 /// `Client`，不再单独缓存。
 type ClientCache = Arc<Mutex<Option<Arc<Client>>>>;
 
-/// 后台回传主线程的消息（Timer 主线程排空）：对话轮事件、模型清单与连通测试结果
+/// 后台回传主线程的消息（Timer 主线程排空）：对话轮事件、模型清单、连通测试与远端模型拉取
 enum UiMsg {
     Turn(StreamMsg),
     Models(Result<Vec<String>, String>),
     ProvTest(SharedString),
+    ProvFetch(Result<Vec<String>, String>),
 }
 
 /// 模型切换下拉的 UI 状态：数据源、激活 ID、别名表（config `[models]`）；
@@ -93,11 +94,12 @@ impl ModelsState {
         state
     }
 
-    /// 模型 ID 的显示名：config 别名优先，未配别名原样显示
+    /// 模型 ID 的显示名：config 别名优先，未配/空别名原样显示
     fn display(&self, id: &str) -> SharedString {
         self.aliases
             .borrow()
             .get(id)
+            .filter(|a| !a.is_empty())
             .map_or_else(|| id.into(), |a| a.as_str().into())
     }
 
@@ -219,6 +221,7 @@ fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
         })
         .collect();
     window.set_provs(Rc::new(VecModel::from(rows)).into());
+    window.set_remote_models(slint::ModelRc::default()); // 远端清单不跨提供商缓存（端点已变）
     let mut sel = select.to_string();
     if sel.is_empty() {
         sel = window.get_prov_sel().to_string();
@@ -238,7 +241,7 @@ fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
         window.set_sel_locked(false);
         window.set_sel_active(false);
         window.set_sel_deleted(false);
-        window.set_prov_aliases("".into());
+        window.set_prov_models(Rc::new(VecModel::<ModelRow>::default()).into());
         return;
     };
     window.set_prov_name(e.name.as_str().into());
@@ -250,7 +253,84 @@ fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
     window.set_sel_locked(e.kind.locked_api().is_some());
     window.set_sel_active(sel == ps.active);
     window.set_sel_deleted(e.deleted);
-    window.set_prov_aliases(fmt_aliases(&e.models).into());
+    prov_models_refresh(&ps, window);
+}
+
+/// 当前选中提供商的模型列表 → 窗口（Step B 行级 CRUD 的展示面）。
+fn prov_models_refresh(ps: &Providers, window: &AppWindow) {
+    let rows: Vec<ModelRow> = ps
+        .find(&window.get_prov_sel())
+        .filter(|e| !e.deleted)
+        .map(|e| {
+            e.models
+                .iter()
+                .map(|m| ModelRow {
+                    id: m.id.as_str().into(),
+                    alias: m.alias.as_str().into(),
+                    thinking: m.thinking,
+                    vision: m.vision,
+                    audio: m.audio,
+                    video: m.video,
+                    tools: m.tools,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    window.set_prov_models(Rc::new(VecModel::from(rows)).into());
+}
+
+/// 远端清单 added 标记同步（当前提供商已含该 id）。
+fn remote_mark_added(window: &AppWindow, model_id: &str, added: bool) {
+    use slint::Model;
+    let list = window.get_remote_models();
+    let mut rows: Vec<RemoteRow> = (0..list.row_count())
+        .filter_map(|i| list.row_data(i))
+        .map(|r| RemoteRow {
+            added: if r.id == model_id { added } else { r.added },
+            ..r
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    rows.sort_by(|a, b| {
+        (a.added, &a.id).cmp(&(b.added, &b.id)) // 未添加的排前，方便连续添加
+    });
+    window.set_remote_models(Rc::new(VecModel::from(rows)).into());
+}
+
+/// 行级模型改写的统一入口：读当前选中提供商 → 取/建该 model → 应用 f → upsert → 回刷。
+/// 提供商被删/不可用则写 prov-status 并静默返回。
+fn model_upsert(db: &Db, window: &AppWindow, model_id: &str, f: impl FnOnce(&mut ModelInfo)) {
+    let sel = window.get_prov_sel().to_string();
+    let ps = match Providers::load(db) {
+        Ok(ps) => ps,
+        Err(e) => {
+            window.set_prov_status(format!("读取失败: {e}").into());
+            return;
+        }
+    };
+    let Some(entry) = ps.find(&sel).filter(|e| !e.deleted) else {
+        window.set_prov_status("提供商不可用，无法编辑模型".into());
+        return;
+    };
+    let mut m = entry
+        .models
+        .iter()
+        .find(|x| x.id == model_id)
+        .cloned()
+        .unwrap_or_else(|| ModelInfo {
+            id: model_id.to_string(),
+            ..Default::default()
+        });
+    f(&mut m);
+    if let Err(e) = Providers::upsert_model(db, &sel, m) {
+        window.set_prov_status(format!("模型保存失败: {e}").into());
+        return;
+    }
+    let ps = Providers::load(db).unwrap_or_default();
+    prov_models_refresh(&ps, window);
+    remote_mark_added(window, model_id, true);
 }
 
 /// 「完成」：表单写回对应条目（kind/锁定族不信任 UI 传入）；密钥框非空才更新 `[keys]`。
@@ -280,7 +360,7 @@ fn prov_save(db: &Db, window: &AppWindow) -> SharedString {
     if e.kind == Provider::Custom && join_url(&e.base_url, &e.url_suffix).is_empty() {
         return "自定义提供商必须填基础地址".into();
     }
-    e.models = parse_aliases(&window.get_prov_aliases());
+    // models 不在表单保存里动（Step B：行级 upsert/remove 即时落盘）
     if let Err(err) = Providers::save_entry(db, &e) {
         return format!("保存失败: {err}").into();
     }
@@ -722,6 +802,101 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 });
             }
         });
+
+        // —— Step B：模型管理（拉远端 + ＋添加 / 自定义 / 别名 / 能力勾选 / 移除） ——
+        window.on_prov_fetch({
+            let window_weak = window.as_weak();
+            let runtime = runtime.clone();
+            let tx = tx.clone();
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let Some(cfg) = prov_test_config(&db, &w) else {
+                    return; // 缺 base 等已写 prov-status
+                };
+                w.set_remote_loading(true);
+                let client = Client::from_config(&cfg);
+                let tx = tx.clone();
+                runtime.spawn(async move {
+                    let result = client.list_models().await.map_err(|e| e.to_string());
+                    let _ = tx.send(UiMsg::ProvFetch(result));
+                });
+            }
+        });
+        window.on_prov_model_added({
+            let window_weak = window.as_weak();
+            let db = db.clone();
+            move |mid| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                model_upsert(&db, &w, &mid, |_| {});
+            }
+        });
+        window.on_prov_model_custom({
+            let window_weak = window.as_weak();
+            let db = db.clone();
+            move |mid, alias| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let mid = mid.trim().to_string();
+                if mid.is_empty() {
+                    w.set_prov_status("自定义模型必须填请求名".into());
+                    return;
+                }
+                let alias = alias.trim().to_string();
+                model_upsert(&db, &w, &mid, |m| m.alias = alias);
+            }
+        });
+        window.on_prov_model_alias({
+            let window_weak = window.as_weak();
+            let db = db.clone();
+            move |mid, alias| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let alias = alias.trim().to_string();
+                model_upsert(&db, &w, &mid, |m| m.alias = alias);
+            }
+        });
+        window.on_prov_model_cap({
+            let window_weak = window.as_weak();
+            let db = db.clone();
+            move |mid, cap, on| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                model_upsert(&db, &w, &mid, |m| match cap {
+                    0 => m.thinking = on,
+                    1 => m.vision = on,
+                    2 => m.audio = on,
+                    3 => m.video = on,
+                    _ => m.tools = on,
+                });
+            }
+        });
+        window.on_prov_model_removed({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            let db = db.clone();
+            move |mid| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let sel = w.get_prov_sel().to_string();
+                if let Err(e) = Providers::remove_model(&db, &sel, &mid) {
+                    w.set_prov_status(format!("移除失败: {e}").into());
+                    return;
+                }
+                *cache.lock().unwrap() = None;
+                let ps = Providers::load(&db).unwrap_or_default();
+                prov_models_refresh(&ps, &w);
+                remote_mark_added(&w, &mid, false);
+            }
+        });
     }
 
     // —— 复制路径：Slint 无剪贴板 API，经 arboard 写系统剪贴板 ——
@@ -757,6 +932,30 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     }
                     UiMsg::ProvTest(msg) => {
                         window.set_prov_status(msg);
+                        continue;
+                    }
+                    UiMsg::ProvFetch(Ok(ids)) => {
+                        let have: Vec<SharedString> = window
+                            .get_prov_models()
+                            .iter()
+                            .map(|m| m.id.clone())
+                            .collect();
+                        let mut rows: Vec<RemoteRow> = ids
+                            .into_iter()
+                            .map(|id| RemoteRow {
+                                added: have.iter().any(|h| h == &id),
+                                id: id.into(),
+                            })
+                            .collect();
+                        rows.sort_by(|a, b| a.added.cmp(&b.added).then(a.id.cmp(&b.id)));
+                        window.set_remote_models(Rc::new(VecModel::from(rows)).into());
+                        window.set_remote_loading(false);
+                        continue;
+                    }
+                    UiMsg::ProvFetch(Err(e)) => {
+                        window.set_remote_loading(false);
+                        let brief: String = e.chars().take(160).collect();
+                        window.set_prov_status(format!("✕ 拉取失败: {brief}").into());
                         continue;
                     }
                 };

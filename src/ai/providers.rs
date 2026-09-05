@@ -26,6 +26,51 @@ const KV_KEY: &str = "providers";
 /// 旧配置（DB-2 单配置时代）在 kv 表中的键名，仅迁移时读取/删除。
 const LEGACY_KV_KEY: &str = "config";
 
+/// 一个可用模型（Step B：从「id→别名」升级为带能力标注的对象）。
+/// 能力位此期**只存只显**（勾选编辑闭环），消费（按能力裁剪请求/禁用开关）在 Step C。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelInfo {
+    /// 请求名（发给网关的 model 字段）
+    pub id: String,
+    /// 显示别名（空 = 原样显示 id）
+    pub alias: String,
+    /// 能力：思考/推理
+    pub thinking: bool,
+    /// 能力：视觉（图片输入）
+    pub vision: bool,
+    /// 能力：语音
+    pub audio: bool,
+    /// 能力：视频
+    pub video: bool,
+    /// 能力：工具调用
+    pub tools: bool,
+}
+
+/// Step A 的 models 旧格式（`{"id":"别名"}` 对象）兼容：读出即升级为对象列表。
+fn de_models<'de, D>(d: D) -> Result<Vec<ModelInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Map(BTreeMap<String, String>),
+        List(Vec<ModelInfo>),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Map(m) => m
+            .into_iter()
+            .map(|(id, alias)| ModelInfo {
+                id,
+                alias,
+                ..Default::default()
+            })
+            .collect(),
+        Raw::List(v) => v,
+    })
+}
+
 /// 一个提供商档案（无密钥）。`serde(default)` 全开：结构演化读旧包不炸。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -44,8 +89,9 @@ pub struct ProviderEntry {
     pub api: Option<Api>,
     /// 是否流式
     pub stream: bool,
-    /// 可用模型表：模型 ID → 显示别名（空别名 = 原样显示；B 期升级为带能力的模型对象）
-    pub models: BTreeMap<String, String>,
+    /// 可用模型列表（按 id 升序持久化；兼容 Step A 的 map 旧格式）
+    #[serde(default, deserialize_with = "de_models")]
+    pub models: Vec<ModelInfo>,
     /// 逻辑删除标记（删除宪法）
     pub deleted: bool,
 }
@@ -60,7 +106,7 @@ impl Default for ProviderEntry {
             url_suffix: String::new(),
             api: None,
             stream: true,
-            models: BTreeMap::new(),
+            models: Vec::new(),
             deleted: false,
         }
     }
@@ -98,55 +144,6 @@ pub fn join_url(base: &str, suffix: &str) -> String {
     }
 }
 
-/// 别名表 ⇆ 弹窗多行文本（每行 `模型ID=显示名`，无 `=` 则别名为空；空行跳过）。
-///
-/// 往返一致（B 期换成正式模型管理前的简化位）：
-///
-/// ```
-/// use std::collections::BTreeMap;
-/// use o_wakaka::ai::providers::{fmt_aliases, parse_aliases};
-///
-/// let m = parse_aliases("gpt-4o=主力\n裸id\nid2=别名=含等号");
-/// assert_eq!(m["gpt-4o"], "主力");
-/// assert_eq!(m["裸id"], "");
-/// assert_eq!(m["id2"], "别名=含等号"); // 首个 '=' 为分隔，ID 不含 '=' 故安全
-/// let text = fmt_aliases(&BTreeMap::from([("a".to_string(), "A".to_string()), ("b".to_string(), String::new())]));
-/// assert_eq!(text, "a=A\nb");
-/// assert_eq!(parse_aliases(&fmt_aliases(&m)), m);
-/// ```
-pub fn parse_aliases(text: &str) -> BTreeMap<String, String> {
-    text.lines().fold(BTreeMap::new(), |mut acc, line| {
-        let line = line.trim();
-        if line.is_empty() {
-            return acc;
-        }
-        // 首个 '=' 前为模型 ID：ID 本身不含 '='，别名含 '=' 也能整体保留
-        match line.split_once('=') {
-            Some((id, alias)) => {
-                acc.insert(id.trim().to_string(), alias.trim().to_string());
-            }
-            None => {
-                acc.insert(line.to_string(), String::new());
-            }
-        }
-        acc
-    })
-}
-
-/// [`parse_aliases`] 的反向：别名空只写 ID。
-pub fn fmt_aliases(map: &BTreeMap<String, String>) -> String {
-    map.iter()
-        .map(|(id, alias)| {
-            if alias.is_empty() {
-                id.clone()
-            } else {
-                format!("{id}={alias}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 impl Providers {
     /// 读整包；未存过 = 空档案。
     pub fn load(db: &Db) -> Result<Self, Box<dyn Error>> {
@@ -180,7 +177,16 @@ impl Providers {
     pub fn view(&self, secrets: &Secrets) -> crate::ai::config::Config {
         use crate::ai::config::Config;
         let entry = self.active_entry();
-        let (kind, base, suffix, api, stream, models) = match entry {
+        // 视图仍暴露 id→别名 映射给下游（空别名也收录，下拉才能列出未命名模型；能力位 Step C 才进请求）
+        let models: BTreeMap<String, String> = entry
+            .map(|e| {
+                e.models
+                    .iter()
+                    .map(|m| (m.id.clone(), m.alias.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let (kind, base, suffix, api, stream) = match entry {
             Some(e) => (
                 e.kind,
                 if e.base_url.is_empty() {
@@ -191,7 +197,6 @@ impl Providers {
                 e.url_suffix.clone(),
                 e.api,
                 e.stream,
-                e.models.clone(),
             ),
             // 无可用条目：给个必然过不了 validate 的空视图（错误文案由调用方出）
             None => (
@@ -200,7 +205,6 @@ impl Providers {
                 String::new(),
                 None,
                 true,
-                BTreeMap::new(),
             ),
         };
         Config {
@@ -262,6 +266,63 @@ impl Providers {
         let mut ps = Self::load(db)?;
         if let Some(slot) = ps.list.iter_mut().find(|p| p.id == entry.id) {
             *slot = entry.clone();
+        }
+        ps.store(db)
+    }
+
+    /// 增改模型（按 id 匹配，整条覆写；列表按 id 升序保持持久化稳定）。
+    ///
+    /// 行级即时落盘 + 旧 map 格式兼容升级，一并验证：
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use o_wakaka::ai::provider::Provider;
+    /// use o_wakaka::ai::providers::{ModelInfo, Providers};
+    /// use o_wakaka::db::Db;
+    ///
+    /// let db = Db::open_in_memory()?;
+    /// let pid = Providers::create(&db, Provider::Custom)?;
+    /// Providers::upsert_model(&db, &pid, ModelInfo { id: "b-model".into(), alias: "B牌".into(), tools: true, ..Default::default() })?;
+    /// Providers::upsert_model(&db, &pid, ModelInfo { id: "a-model".into(), ..Default::default() })?;
+    /// let e = Providers::load(&db)?.find(&pid).unwrap().clone();
+    /// assert_eq!(e.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["a-model", "b-model"]); // 按 id 排序
+    /// // 同 id 再存 = 覆写不重复
+    /// Providers::upsert_model(&db, &pid, ModelInfo { id: "b-model".into(), alias: "B牌改".into(), ..Default::default() })?;
+    /// let e = Providers::load(&db)?.find(&pid).unwrap().clone();
+    /// assert_eq!((e.models.len(), e.models[1].alias.as_str()), (2, "B牌改"));
+    /// assert!(!e.models[1].tools, "覆写整条：未勾能力即清除");
+    ///
+    /// // 旧 Step A map 格式条目读出即升级
+    /// db.kv_set("providers", r#"{"active":"p9","active_model":"","list":[
+    ///   {"id":"p9","kind":"custom","name":"旧","base_url":"u","url_suffix":"","api":null,
+    ///    "stream":true,"models":{"x":"小x"},"deleted":false}]}"#)?;
+    /// let e = Providers::load(&db)?.find("p9").unwrap().clone();
+    /// assert_eq!((e.models.len(), e.models[0].id.as_str(), e.models[0].alias.as_str()), (1, "x", "小x"));
+    /// # Ok(()) }
+    /// ```
+    pub fn upsert_model(db: &Db, prov_id: &str, m: ModelInfo) -> Result<(), Box<dyn Error>> {
+        let mut ps = Self::load(db)?;
+        let Some(e) = ps.list.iter_mut().find(|p| p.id == prov_id && !p.deleted) else {
+            return Err("提供商不存在或已删除".into());
+        };
+        match e.models.iter_mut().find(|x| x.id == m.id) {
+            Some(slot) => *slot = m,
+            None => e.models.push(m),
+        }
+        e.models.sort_by(|a, b| a.id.cmp(&b.id));
+        ps.store(db)
+    }
+
+    /// 删除模型（逻辑删仅到提供商一级，模型直接物理移除——列表项可重加）；
+    /// 若正删的是全局当前模型则一并清空指针。
+    pub fn remove_model(db: &Db, prov_id: &str, model_id: &str) -> Result<(), Box<dyn Error>> {
+        let mut ps = Self::load(db)?;
+        let Some(e) = ps.list.iter_mut().find(|p| p.id == prov_id && !p.deleted) else {
+            return Ok(());
+        };
+        e.models.retain(|m| m.id != model_id);
+        if ps.active_model == model_id && ps.active == *prov_id {
+            ps.active_model = String::new();
         }
         ps.store(db)
     }
@@ -329,7 +390,8 @@ impl Providers {
     /// assert_eq!(ps.active_model, "gpt-4o");
     /// let e = ps.active_entry().unwrap();
     /// assert_eq!((e.base_url.as_str(), e.name.as_str()), ("https://api.x/v1", "通用兼容"));
-    /// assert_eq!(e.models["gpt-4o"], "主力");
+    /// assert_eq!(e.models[0].id, "gpt-4o");
+    /// assert_eq!(e.models[0].alias, "主力"); // 旧 map 值折成别名字段
     /// // 旧配置彻底不留：kv("config") 已删，toml 只剩 [keys]
     /// assert_eq!(db.kv_get("config")?, None);
     /// let slim = std::fs::read_to_string(&path)?;
@@ -378,7 +440,15 @@ impl Providers {
             url_suffix: String::new(),
             api: cfg.api,
             stream: cfg.stream,
-            models: cfg.models,
+            models: cfg
+                .models
+                .into_iter()
+                .map(|(id, alias)| ModelInfo {
+                    id,
+                    alias,
+                    ..Default::default()
+                })
+                .collect(),
             deleted: false,
         };
         let mut secrets: Secrets = super::config::load_toml(path).unwrap_or_default();
