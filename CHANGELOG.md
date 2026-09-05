@@ -20,7 +20,6 @@
   - 别名编辑三修：**逐字符只静默落库、不再重建模型列表**（原重建销毁 TextInput 致每敲一字失焦）——「完成」收起时经新 `prov-model-commit` 回调统一回刷标签与下拉；编辑态不再隐藏显示名（别名/ID 双文本常显）；编辑态撤掉尾部 spacer（与输入框抢 stretch + TextInput 隐式宽随字数变 = 输入框前后抖动）
   - 「大下巴」根因：详情卡内模型区与尾部 filler **两个 `vertical-stretch:1` 平分剩余高度**，空隙卡在执行按钮上方——删掉尾部 filler，模型列表独吞剩余空间、按钮贴回内容
   - 「大下巴」真根因（补修）：Window 根变多子元素后 `if` 块（主三框 / SettingsPage）**不再自动撑满窗口**，只有 implicit 高——两处显式 `width/height: root.*`，整页贴窗、随窗口 100% 自适应
-  - 设置页纵向占满：NavItem/ProvItemRow/PromptRow 组件定义**定高改 `min-height`**（组件内写死 `height` 时实例加 `vertical-stretch` 空转——布局不再拉伸定高项）；导航四项、提供商条目、提示词输入框随窗口高度均分卡片剩余空间，小窗由 min-height 兜底不塌；ProvItemRow 撑高后文字 `alignment: center` 保持垂直居中
 
 ### Added
 - 思考能力消费（Step C，能力位首个消费点）：当前模型未勾选「思考」→ Thinking 按钮置灰显「Thinking ✕」，**发送时即使开关开着也强制关**（请求带 `reasoning.effort=none`）；未在提供商登记的模型视为支持，绝不误关
