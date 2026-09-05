@@ -212,12 +212,12 @@ component NavItem inherits Rectangle {
     }
 }
 
-/// 返回钮（设置页顶栏）：左箭头图标 + 文字，描边胶囊与整体卡片语汇一致
+/// 返回钮（导航卡顶部，与「设置」标题并排）：左箭头 + 文字，可被外层布局定宽
 component BackButton inherits Rectangle {
     callback clicked();
 
-    height: 34px;
-    border-radius: 8px;
+    height: 26px;
+    border-radius: 7px;
     border-width: 1px;
     border-color: Theme.p.inputBorder;
     background: ta.has-hover ? Theme.p.listHover : Theme.p.panelBg;
@@ -228,16 +228,16 @@ component BackButton inherits Rectangle {
         clicked => { root.clicked(); }
     }
     HorizontalLayout {
-        padding: 10px;
-        spacing: 6px;
+        padding: 6px;
+        spacing: 4px;
         // Rectangle 随布局吃满行高，Icon 定高居中（Slint 布局对固定高元素不垂直居中）
         Rectangle {
-            width: 16px;
+            width: 14px;
             Icon {
                 x: 0;
                 y: (parent.height - self.height) / 2;
-                width: 16px;
-                height: 16px;
+                width: 14px;
+                height: 14px;
                 which: 6;
                 ink: Theme.p.textSecondary;
             }
@@ -245,7 +245,7 @@ component BackButton inherits Rectangle {
         Text {
             text: "返回";
             color: Theme.p.textPrimary;
-            font-size: 13px;
+            font-size: 12px;
             vertical-alignment: center;
         }
     }
@@ -324,22 +324,32 @@ component ModelCard inherits Rectangle {
         HorizontalLayout {
             height: 24px;
             spacing: 6px;
-            // —— 名称行：查看态（别名优先，无别名显示 ID） ——
+            // 别名（主展示，仅当有别名时替换 ID 样式）
             Text {
-                visible: !root.editing;
-                text: root.mdl.alias != "" ? root.mdl.alias : root.mdl.id;
+                visible: !root.editing && root.mdl.alias != "";
+                text: root.mdl.alias;
                 color: Theme.p.textPrimary;
                 font-size: 12px;
                 overflow: elide;
                 vertical-alignment: center;
             }
+            // 请求 ID：灰色，恒显（编辑态也不藏），无别名时升为主色
+            Text {
+                visible: !root.editing;
+                text: root.mdl.id;
+                color: root.mdl.alias != "" ? Theme.p.textMuted : Theme.p.textPrimary;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            // 编辑态：别名输入框（自带边框，占剩余宽）
             Rectangle {
                 visible: root.editing;
                 horizontal-stretch: 1;
                 border-radius: 5px;
                 border-width: 1px;
                 border-color: Theme.p.inputBorder;
-                background: Theme.p.panelBg;
+                background: Theme.p.windowBg;
                 ti := TextInput {
                     x: 6px;
                     y: 0;
@@ -359,35 +369,24 @@ component ModelCard inherits Rectangle {
                     y: 0;
                     height: parent.height;
                     vertical-alignment: center;
-                    text: "显示别名（默认 = 请求ID）";
+                    text: "设置别名（留空显示请求ID）";
                     color: Theme.p.textMuted;
                     font-size: 12px;
                 }
             }
-            Text {
-                visible: !root.editing && root.mdl.alias != "";
-                text: root.mdl.id;
-                color: Theme.p.textMuted;
-                font-size: 11px;
-                overflow: elide;
-                vertical-alignment: center;
-            }
-            Rectangle {
-                visible: !root.editing;
-                horizontal-stretch: 1;
-            }
+            Rectangle { horizontal-stretch: 1; }
+            // 别名 ⇄ 完成：同一按钮原地切换文案/配色
             Pill {
-                visible: !root.editing;
                 width: 46px;
-                label: "别名";
-                picked => { root.edit-requested(); }
-            }
-            Pill {
-                visible: root.editing;
-                width: 46px;
-                label: "完成";
-                primary: true;
-                picked => { root.edit-done(); }
+                label: root.editing ? "完成" : "别名";
+                primary: root.editing;
+                picked => {
+                    if root.editing {
+                        root.edit-done();
+                    } else {
+                        root.edit-requested();
+                    }
+                }
             }
             Pill {
                 width: 30px;
@@ -507,13 +506,20 @@ export component SettingsPage inherits Rectangle {
                 VerticalLayout {
                     padding: 8px;
                     spacing: 4px;
-                    BackButton {
-                        clicked => { root.back(); }
-                    }
-                    Text {
-                        text: "设置";
-                        color: Theme.p.textPrimary;
-                        font-size: 15px;
+                    // 返回 + 「设置」标题并排一行（返回在左，钮缩小）
+                    HorizontalLayout {
+                        height: 26px;
+                        spacing: 6px;
+                        BackButton {
+                            width: 58px;
+                            clicked => { root.back(); }
+                        }
+                        Text {
+                            text: "设置";
+                            color: Theme.p.textPrimary;
+                            font-size: 15px;
+                            vertical-alignment: center;
+                        }
                     }
                     NavItem {
                         label: "界面";
@@ -542,6 +548,8 @@ export component SettingsPage inherits Rectangle {
             // —— 提供商页：列表卡 + 详情卡（Rust 为真相源，操作即时回注） ——
             if root.page == 1 : HorizontalLayout {
                 spacing: 10px;
+                // if-block 子元素不自动占位：无此行则不随窗口撑满
+                horizontal-stretch: 1;
 
                 prov-list := Rectangle {
                     width: Math.max(120px, Math.min(180px, root.width * 0.17));
@@ -750,30 +758,71 @@ export component SettingsPage inherits Rectangle {
                             if root.custom-open : HorizontalLayout {
                                 spacing: 6px;
                                 height: 26px;
-                                custom-id := TextInput {
-                                    height: 26px;
+                                Rectangle {
                                     horizontal-stretch: 1;
-                                    vertical-alignment: center;
-                                    single-line: true;
-                                    font-size: 12px;
-                                    color: Theme.p.textPrimary;
+                                    min-width: 100px;
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: Theme.p.inputBorder;
+                                    background: Theme.p.windowBg;
+                                    ci := TextInput {
+                                        x: 6px;
+                                        y: 0;
+                                        width: parent.width - 12px;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        font-size: 12px;
+                                        color: Theme.p.textPrimary;
+                                        selection-background-color: Theme.p.accentSoftBg;
+                                    }
+                                    Text {
+                                        visible: ci.text == "";
+                                        x: 6px;
+                                        y: 0;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        text: "模型请求 ID";
+                                        color: Theme.p.textMuted;
+                                        font-size: 12px;
+                                    }
                                 }
-                                custom-alias := TextInput {
+                                Rectangle {
                                     width: Math.max(90px, root.width * 0.1);
-                                    height: 26px;
-                                    vertical-alignment: center;
-                                    single-line: true;
-                                    font-size: 12px;
-                                    color: Theme.p.textPrimary;
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: Theme.p.inputBorder;
+                                    background: Theme.p.windowBg;
+                                    ca := TextInput {
+                                        x: 6px;
+                                        y: 0;
+                                        width: parent.width - 12px;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        font-size: 12px;
+                                        color: Theme.p.textPrimary;
+                                        selection-background-color: Theme.p.accentSoftBg;
+                                    }
+                                    Text {
+                                        visible: ca.text == "";
+                                        x: 6px;
+                                        y: 0;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        text: "别名（可选）";
+                                        color: Theme.p.textMuted;
+                                        font-size: 12px;
+                                    }
                                 }
                                 Pill {
                                     width: 48px;
                                     label: "添加";
                                     primary: true;
                                     picked => {
-                                        root.prov-model-custom(custom-id.text, custom-alias.text);
-                                        custom-id.text = "";
-                                        custom-alias.text = "";
+                                        root.prov-model-custom(ci.text, ca.text);
+                                        ci.text = "";
+                                        ca.text = "";
                                         root.custom-open = false;
                                     }
                                 }
@@ -788,36 +837,32 @@ export component SettingsPage inherits Rectangle {
                         }
                         Rectangle { vertical-stretch: 1; }
 
+                        // 已删条目专属反馈行（模型框内状态随块隐藏，这里补位）
+                        if root.sel-deleted : Text {
+                            visible: root.prov-status != "";
+                            text: root.prov-status;
+                            color: Theme.p.link;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
+                        // 按钮行：删除类恒左，动效项右（「完成」最右）
                         HorizontalLayout {
                             spacing: 8px;
                             height: 30px;
                             visible: root.prov-sel != "";
-                            Text {
-                                visible: root.sel-deleted && root.prov-status != "";
-                                text: root.prov-status;
-                                color: Theme.p.link;
-                                font-size: 12px;
-                                wrap: word-wrap;
-                                horizontal-stretch: 1;
-                            }
-                            Text {
-                                visible: root.sel-deleted && root.prov-status == "";
-                                text: " ";
-                                horizontal-stretch: 1;
-                            }
                             Pill {
                                 width: 72px;
-                                label: "完成";
-                                primary: true;
-                                visible: !root.sel-deleted;
-                                picked => { root.prov-saved(); }
+                                label: root.sel-deleted ? "彻底删除" : "删除";
+                                picked => {
+                                    if root.sel-deleted {
+                                        root.prov-purged();
+                                    } else {
+                                        root.prov-deleted();
+                                    }
+                                }
                             }
-                            if !root.sel-deleted : Rectangle { horizontal-stretch: 1; }
-                            if !root.sel-deleted : Pill {
-                                width: 72px;
-                                label: "删除";
-                                picked => { root.prov-deleted(); }
-                            }
+                            Rectangle { horizontal-stretch: 1; }
                             if !root.sel-deleted && !root.sel-active : Pill {
                                 width: 108px;
                                 label: "使用此提供商";
@@ -828,10 +873,11 @@ export component SettingsPage inherits Rectangle {
                                 label: "恢复";
                                 picked => { root.prov-restored(); }
                             }
-                            if root.sel-deleted : Pill {
-                                width: 88px;
-                                label: "彻底删除";
-                                picked => { root.prov-purged(); }
+                            if !root.sel-deleted : Pill {
+                                width: 72px;
+                                label: "完成";
+                                primary: true;
+                                picked => { root.prov-saved(); }
                             }
                         }
                     }
