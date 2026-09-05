@@ -16,11 +16,24 @@
 //! - **删除宪法**：一切"删除"都是两级——先**逻辑删除**（`session.deleted_at` 置时间戳 /
 //!   JSON 条目 `deleted` 标记，可恢复），再经显式**彻底删除**物理清除。列表读取恒过滤
 //!   逻辑删除项。persona/kv 无删除场景；message 随所属会话级联清除。
+//!
+//! # 文件结构
+//! - `db.rs`（本文件）：句柄与 schema——open / PRAGMA / 版本策略 / 建表
+//! - `db/kv.rs`：kv 一站配置存取
+//! - `db/persona.rs`：角色设定活跃行读写
+//! - `db/session.rs`：会话与消息、回收站两级删除
+
+mod kv;
+mod persona;
+mod session;
 
 use std::{error::Error, fs, path::Path};
 
-use rusqlite::{Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use rusqlite::Connection;
+
+// 领域类型仍从 db 命名空间露出：外部 use 路径不因拆分而变
+pub use persona::Persona;
+pub use session::{LoadedMessage, LoadedSession, MessagePayload};
 
 /// 当前 schema 版本。改动表结构 = 此数 +1，旧库整库重建（开发期策略；
 /// 纯加列/加表可像 v2→v3、v3→v4 这样留补结构例外，保住已有数据）。
@@ -42,79 +55,6 @@ const PERSONA_DDL: &str = "CREATE TABLE IF NOT EXISTS persona (
                created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
              );";
-
-/// 消息的 JSON 叶子：只放不查询的展示态，全部字段可缺省（读旧行容错）。
-///
-/// 缺省语义 = "无思考、收起、未被手动干预"：
-///
-/// ```
-/// use o_wakaka::db::MessagePayload;
-///
-/// let p: MessagePayload = serde_json::from_str(r#"{"tstate": 2}"#).unwrap();
-/// assert_eq!((p.thinking.as_str(), p.tstate, p.tauto), ("", 2, true));
-/// // 完全缺省走 Default（tauto=true 而非 bool 零值 false）
-/// let d: MessagePayload = serde_json::from_str("{}").unwrap();
-/// assert!(d.tauto && d.tstate == 0 && d.thinking.is_empty());
-/// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct MessagePayload {
-    /// 思考过程全文（仅 assistant；user 消息 payload 整体为 NULL）
-    pub thinking: String,
-    /// 思考展示态，与 `ui` 侧 `ChatMessage.tstate` 同义：0 收起 | 1 部分 | 2 全开
-    pub tstate: i32,
-    /// 未被手动干预：思考完成时"部分"态自动转收起
-    pub tauto: bool,
-}
-
-impl Default for MessagePayload {
-    fn default() -> Self {
-        Self {
-            thinking: String::new(),
-            tstate: 0,
-            tauto: true,
-        }
-    }
-}
-
-/// 读到的一条消息（启动回填气泡用；身份/序号列不外露，UI 不需要）。
-#[derive(Debug, Clone)]
-pub struct LoadedMessage {
-    /// "user" | "assistant"
-    pub role: String,
-    /// 气泡正文
-    pub content: String,
-    /// 产出本条回答的模型 ID（user 消息为空串）
-    pub model: String,
-    /// JSON 叶子（思考全文与展示态）
-    pub payload: MessagePayload,
-}
-
-/// 读到的一个会话（含按序消息）。
-#[derive(Debug, Clone)]
-pub struct LoadedSession {
-    /// 行 id：UI 侧簿记与 [`Db::insert_message`] 的定位键
-    pub id: i64,
-    /// 侧栏标题
-    pub title: String,
-    /// 按会话内序号升序
-    pub messages: Vec<LoadedMessage>,
-}
-
-/// 一行角色设定（persona 表活跃行投影；payload 列暂不露出）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct Persona {
-    /// 行 id
-    pub id: i64,
-    /// "user" | "assistant"
-    pub kind: String,
-    /// 显示名（当前恒"默认…"，多人格管理再启用）
-    pub name: String,
-    /// 系统提示词（assistant）/ 人设描述（user）；空 = 不注入
-    pub system_prompt: String,
-    /// 生成温度；`None` = 未设定，请求不发 temperature 字段
-    pub temperature: Option<f64>,
-}
 
 /// 数据库句柄：打开即完成建目录、PRAGMA、版本检查与建表。
 ///
@@ -245,280 +185,6 @@ impl Db {
         ))?;
         Ok(())
     }
-
-    /// 读 kv 一站：未存过为 `None`；值是 JSON 文本（写入侧有 CHECK 保证）。
-    ///
-    /// 存取自成一体，覆盖即 upsert，非 JSON 值被 CHECK 拒绝：
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use o_wakaka::db::Db;
-    ///
-    /// let db = Db::open_in_memory()?;
-    /// assert_eq!(db.kv_get("config")?, None);
-    /// db.kv_set("config", r#"{"model":"m1"}"#)?;
-    /// assert_eq!(db.kv_get("config")?.as_deref(), Some(r#"{"model":"m1"}"#));
-    /// db.kv_set("config", r#"{"model":"m2"}"#)?;
-    /// assert_eq!(db.kv_get("config")?.as_deref(), Some(r#"{"model":"m2"}"#));
-    /// assert!(db.kv_set("config", "not json").is_err());
-    /// # Ok(()) }
-    /// ```
-    pub fn kv_get(&self, key: &str) -> Result<Option<String>, Box<dyn Error>> {
-        Ok(self
-            .conn
-            .query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| r.get(0))
-            .optional()?)
-    }
-
-    /// 写 kv 一站（value 必须是合法 JSON 文本；upsert 同时刷新 updated_at）。
-    pub fn kv_set(&self, key: &str, value: &str) -> Result<(), Box<dyn Error>> {
-        self.conn.execute(
-            &format!(
-                "INSERT INTO kv (key, value) VALUES (?1, ?2)
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = {NOW}"
-            ),
-            rusqlite::params![key, value],
-        )?;
-        Ok(())
-    }
-
-    /// 删 kv 一站（不存在静默无操作）；旧配置迁移后清理用。
-    pub fn kv_delete(&self, key: &str) -> Result<(), Box<dyn Error>> {
-        self.conn.execute("DELETE FROM kv WHERE key = ?1", [key])?;
-        Ok(())
-    }
-
-    /// 某 kind 的活跃角色设定行；未设定过为 `None`。
-    pub fn active_persona(&self, kind: &str) -> Result<Option<Persona>, Box<dyn Error>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT id, kind, name, system_prompt, temperature
-                 FROM persona WHERE kind = ?1 AND is_active = 1 ORDER BY id LIMIT 1",
-                [kind],
-                |r| {
-                    Ok(Persona {
-                        id: r.get(0)?,
-                        kind: r.get(1)?,
-                        name: r.get(2)?,
-                        system_prompt: r.get(3)?,
-                        temperature: r.get(4)?,
-                    })
-                },
-            )
-            .optional()?)
-    }
-
-    /// 保存角色设定：有活跃行即更新，无则建为活跃（一 kind 恒一行）。
-    ///
-    /// 往返与"未设定 = NULL"可离线验证：
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use o_wakaka::db::Db;
-    ///
-    /// let db = Db::open_in_memory()?;
-    /// assert_eq!(db.active_persona("assistant")?, None);
-    /// db.upsert_active_persona("assistant", "默认助手", "你言简意赅", Some(0.3))?;
-    /// let p = db.active_persona("assistant")?.unwrap();
-    /// assert_eq!((p.name.as_str(), p.system_prompt.as_str(), p.temperature),
-    ///            ("默认助手", "你言简意赅", Some(0.3)));
-    /// // 再存覆盖同一行（id 不变），温度可清空回未设定
-    /// db.upsert_active_persona("assistant", "默认助手", "你罗嗦", None)?;
-    /// let p2 = db.active_persona("assistant")?.unwrap();
-    /// assert_eq!((p2.id, p2.system_prompt.as_str(), p2.temperature), (p.id, "你罗嗦", None));
-    /// // user kind 独立成行，未存过仍是 None
-    /// assert_eq!(db.active_persona("user")?, None);
-    /// # Ok(()) }
-    /// ```
-    pub fn upsert_active_persona(
-        &self,
-        kind: &str,
-        name: &str,
-        system_prompt: &str,
-        temperature: Option<f64>,
-    ) -> Result<(), Box<dyn Error>> {
-        let updated = self.conn.execute(
-            &format!(
-                "UPDATE persona SET name = ?1, system_prompt = ?2, temperature = ?3,
-                 updated_at = {NOW} WHERE kind = ?4 AND is_active = 1"
-            ),
-            rusqlite::params![name, system_prompt, temperature, kind],
-        )?;
-        if updated == 0 {
-            self.conn.execute(
-                "INSERT INTO persona (kind, name, system_prompt, temperature, is_active)
-                 VALUES (?1, ?2, ?3, ?4, 1)",
-                rusqlite::params![kind, name, system_prompt, temperature],
-            )?;
-        }
-        Ok(())
-    }
-
-    /// 新建会话，返回行 id。
-    pub fn insert_session(&self, title: &str) -> Result<i64, Box<dyn Error>> {
-        self.conn
-            .execute("INSERT INTO session (title) VALUES (?1)", [title])?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    /// 重命名会话（首条消息摘要替换占位标题），同时刷新活跃时间。
-    pub fn set_session_title(&self, id: i64, title: &str) -> Result<(), Box<dyn Error>> {
-        self.conn.execute(
-            &format!("UPDATE session SET title = ?1, updated_at = {NOW} WHERE id = ?2"),
-            rusqlite::params![title, id],
-        )?;
-        Ok(())
-    }
-
-    /// 写入一条消息：`seq` 会话内自动续号（乱序/重放保险丝），并 bump 会话活跃时间。
-    ///
-    /// `model` 仅 assistant 携带（产出一条回答所用）；user 消息传空串、`payload` 传 `None`。
-    pub fn insert_message(
-        &self,
-        session_id: i64,
-        role: &str,
-        content: &str,
-        model: &str,
-        payload: Option<&MessagePayload>,
-    ) -> Result<i64, Box<dyn Error>> {
-        let payload_json = payload.map(serde_json::to_string).transpose()?;
-        let seq: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM message WHERE session_id = ?1",
-            [session_id],
-            |r| r.get(0),
-        )?;
-        self.conn.execute(
-            "INSERT INTO message (session_id, seq, role, content, model, payload)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![session_id, seq, role, content, model, payload_json],
-        )?;
-        self.conn.execute(
-            &format!("UPDATE session SET updated_at = {NOW} WHERE id = ?1"),
-            [session_id],
-        )?;
-        Ok(self.conn.last_insert_rowid())
-    }
-
-    /// 全量读取**未删除**会话：按活跃时间升序（重启后"最近用过的在最下"，与新建顺序一致），
-    /// 消息按会话内序号升序。DB-1 不分页。
-    pub fn load_all(&self) -> Result<Vec<LoadedSession>, Box<dyn Error>> {
-        let heads: Vec<(i64, String)> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, title FROM session WHERE deleted_at IS NULL ORDER BY updated_at, id",
-            )?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<Result<Vec<_>, _>>()?
-        };
-        let mut sessions = Vec::with_capacity(heads.len());
-        for (id, title) in heads {
-            sessions.push(LoadedSession {
-                id,
-                title,
-                messages: self.messages_of(id)?,
-            });
-        }
-        Ok(sessions)
-    }
-
-    /// 单会话消息按 seq 升序。
-    fn messages_of(&self, session_id: i64) -> Result<Vec<LoadedMessage>, Box<dyn Error>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT role, content, model, payload FROM message WHERE session_id = ?1 ORDER BY seq",
-        )?;
-        stmt.query_map([session_id], |r| {
-            let raw: Option<String> = r.get(3)?;
-            // 坏 payload 回退缺省值：读历史永不炸
-            let payload = raw
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-            Ok(LoadedMessage {
-                role: r.get(0)?,
-                content: r.get(1)?,
-                model: r.get(2)?,
-                payload,
-            })
-        })?
-        .collect::<Result<_, _>>()
-        .map_err(Into::into)
-    }
-
-    /// 回收站列表：已逻辑删除的会话 (id, title)，按 id 升序。
-    pub fn list_deleted(&self) -> Result<Vec<(i64, String)>, Box<dyn Error>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, title FROM session WHERE deleted_at IS NOT NULL ORDER BY id")?;
-        Ok(stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<_, _>>()?)
-    }
-
-    /// 装载单个会话（含消息）；不存在回 `None`。回收站恢复推入侧栏用。
-    pub fn load_session(&self, id: i64) -> Result<Option<LoadedSession>, Box<dyn Error>> {
-        let Some(title) = self
-            .conn
-            .query_row("SELECT title FROM session WHERE id = ?1", [id], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(LoadedSession {
-            id,
-            title,
-            messages: self.messages_of(id)?,
-        }))
-    }
-
-    /// 逻辑删除会话：置 `deleted_at`，随时可 [`restore_session`](Self::restore_session) 找回。
-    pub fn soft_delete_session(&self, id: i64) -> Result<(), Box<dyn Error>> {
-        self.conn.execute(
-            &format!("UPDATE session SET deleted_at = {NOW} WHERE id = ?1"),
-            [id],
-        )?;
-        Ok(())
-    }
-
-    /// 恢复逻辑删除的会话。
-    pub fn restore_session(&self, id: i64) -> Result<(), Box<dyn Error>> {
-        self.conn
-            .execute("UPDATE session SET deleted_at = NULL WHERE id = ?1", [id])?;
-        Ok(())
-    }
-
-    /// 彻底删除：物理清除会话与其全部消息（不可找回）。
-    ///
-    /// 两级删除闭环可离线验证：
-    ///
-    /// ```
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use o_wakaka::db::Db;
-    ///
-    /// let db = Db::open_in_memory()?;
-    /// let sid = db.insert_session("要删的")?;
-    /// db.insert_message(sid, "user", "hi", "", None)?;
-    ///
-    /// db.soft_delete_session(sid)?;
-    /// assert!(db.load_all()?.is_empty(), "逻辑删除后列表不可见");
-    ///
-    /// db.restore_session(sid)?;
-    /// assert_eq!(db.load_all()?[0].messages.len(), 1, "恢复后消息还在");
-    ///
-    /// db.soft_delete_session(sid)?;
-    /// db.purge_session(sid)?;
-    /// assert!(db.load_all()?.is_empty());
-    /// // 行与消息都物理清除（无 FK 残留可插新消息验证会话确实没了）
-    /// assert!(db.insert_message(sid, "user", "x", "", None).is_err());
-    /// # Ok(()) }
-    /// ```
-    pub fn purge_session(&self, id: i64) -> Result<(), Box<dyn Error>> {
-        self.conn
-            .execute("DELETE FROM message WHERE session_id = ?1", [id])?;
-        self.conn
-            .execute("DELETE FROM session WHERE id = ?1", [id])?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -577,45 +243,6 @@ mod tests {
         assert_eq!(upgraded.load_all()?[0].title, "keep");
         upgraded.soft_delete_session(sid)?;
         assert!(upgraded.load_all()?.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn list_deleted_and_load_session_for_trash() -> Result<(), Box<dyn Error>> {
-        let db = Db::open_in_memory()?;
-        let keep = db.insert_session("留")?;
-        let gone = db.insert_session("删")?;
-        db.insert_message(gone, "user", "hi", "", None)?;
-        assert!(db.list_deleted()?.is_empty());
-
-        db.soft_delete_session(gone)?;
-        assert_eq!(db.list_deleted()?, vec![(gone, "删".to_string())]);
-        // 未删的 load_session 也可读（供恢复推入）；已删同样能读出（恢复语义）
-        let s = db.load_session(gone)?.unwrap();
-        assert_eq!((s.id, s.messages.len()), (gone, 1));
-        assert_eq!(db.load_session(keep)?.unwrap().messages.len(), 0);
-        assert!(db.load_session(999)?.is_none());
-
-        db.purge_session(gone)?;
-        assert!(db.list_deleted()?.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn seq_is_per_session_and_order_preserved() -> Result<(), Box<dyn Error>> {
-        let db = Db::open_in_memory()?;
-        let a = db.insert_session("a")?;
-        let b = db.insert_session("b")?;
-        db.insert_message(a, "user", "x", "", None)?;
-        db.insert_message(a, "assistant", "y", "m1", None)?;
-        db.insert_message(b, "user", "z", "", None)?;
-        let all = db.load_all()?;
-        // 同毫秒新建时按 id 稳定排序：a 在前
-        assert_eq!((all[0].title.as_str(), all[1].title.as_str()), ("a", "b"));
-        let contents: Vec<&str> = all[0].messages.iter().map(|m| m.content.as_str()).collect();
-        assert_eq!(contents, ["x", "y"]);
-        assert_eq!(all[0].messages[1].model, "m1");
-        assert_eq!(all[1].messages.len(), 1);
         Ok(())
     }
 }
