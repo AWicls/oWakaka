@@ -25,12 +25,14 @@
 //! - `ui.rs`（本文件）：共享句柄 [`Ctx`]、入口 [`run`]（构建窗口 + 按页接线 + 事件循环）、
 //!   对话核心接线 `wire_chat`/`wire_timer` 与懒建客户端 `ensure_client`
 //! - `ui/host.rs`：多会话簿记 + 会话栏接线 `wire_sidebar`（侧栏/回收站）+ `refresh_trash`
+//! - `ui/frame.rs`：无边框窗框接线 `wire_frame`——标题栏三键与 winit 原生拖窗
 //! - `ui/bubbles.rs`：气泡模型操作（增量合并、思考折叠、历史投影）
 //! - `ui/models.rs`：模型下拉状态机 `ModelsState` + 接线 `wire_models`
 //! - `ui/prov.rs`：提供商页装配（providers 整包 ↔ 窗口）+ 接线 `wire_prov`
 //! - `ui/settings.rs`：设置页保存 + 接线 `wire_settings`
 
 mod bubbles;
+mod frame;
 mod host;
 mod models;
 mod prov;
@@ -135,6 +137,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     };
 
     // —— 接线：每页一块；会话核心（发送/停止/回流）留在本文件，页面归各子模块 ——
+    frame::wire_frame(&window);
     host::wire_sidebar(&window, &ctx);
     wire_chat(&window, &ctx);
 

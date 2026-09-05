@@ -1,6 +1,7 @@
-// oWakaka P0 对话壳装配层：AppWindow 三框布局——左会话栏（session.slint，可拖宽）
-// | 右上对话区（bubble.slint 气泡） | 右下输入区（input.slint，可拖高）。
-// 拖拽条见 splitter.slint；ChatMessage/SessionItem 在此统一再导出供 Rust 消费。
+// oWakaka P0 对话壳装配层：AppWindow 无边框窗口（no-frame）+ 自绘标题栏（左上角三键），
+// 其下三框布局——左会话栏（session.slint，可拖宽）| 右上对话区（bubble.slint 气泡）
+// | 右下输入区（input.slint，可拖高）。拖拽条见 splitter.slint；
+// ChatMessage/SessionItem 在此统一再导出供 Rust 消费。
 // 配色一律取自 theme.slint 的 Theme 全局（VS Code 现代深/浅双主题 + 跟随系统）。
 
 import { ScrollView } from "std-widgets.slint";
@@ -47,6 +48,81 @@ component TinyBtn inherits Rectangle {
     }
 }
 
+// —— 无边框自绘标题栏：原生窗口按钮桥（min/max/close/drag）与 CaptionBar 组件 ——
+
+/// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger 悬停红底白字（关闭键）
+component CaptionBtn inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> danger: false;
+    callback picked();
+
+    width: 46px;
+    background: ta.has-hover ? (root.danger ? #c42b1c : Theme.p.listHover) : transparent;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.picked(); }
+    }
+    t := Text {
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.glyph;
+        font-size: 13px;
+        color: ta.has-hover && root.danger ? white : Theme.p.textSecondary;
+    }
+}
+
+/// 顶部 34px 标题栏：左三键（最小化/最大化·还原/关闭）+ 拖拽区（按下发起原生拖窗，双击切最大化）
+component CaptionBar inherits Rectangle {
+    in property <bool> is-maximized;
+    callback win-minimize();
+    callback win-maximize();
+    callback win-close();
+    callback win-drag();
+
+    background: Theme.p.windowBg;
+    HorizontalLayout {
+        spacing: 0px;
+        CaptionBtn {
+            glyph: "─";
+            picked => { root.win-minimize(); }
+        }
+        CaptionBtn {
+            glyph: root.is-maximized ? "❐" : "□";
+            picked => { root.win-maximize(); }
+        }
+        CaptionBtn {
+            glyph: "✕";
+            danger: true;
+            picked => { root.win-close(); }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                pointer-event(ev) => {
+                    if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.down) {
+                        root.win-drag();
+                    }
+                }
+                double-clicked => { root.win-maximize(); }
+            }
+            Text {
+                width: parent.width;
+                height: parent.height;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                text: "oWakaka";
+                color: Theme.p.textMuted;
+                font-size: 12px;
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "oWakaka";
     background: Theme.p.windowBg;
@@ -54,6 +130,9 @@ export component AppWindow inherits Window {
     preferred-height: 720px;
     min-width: 720px;
     min-height: 460px;
+    // 无边框：winit 后端 set_decorations(false)；外圈 6px 可拖拽缩放
+    no-frame: true;
+    resize-border-width: 6px;
 
     in property <[ChatMessage]> messages;
     in property <bool> generating; // 当前可见会话是否生成中
@@ -125,17 +204,26 @@ export component AppWindow inherits Window {
     callback settings-requested(); // 进入设置整页（Rust 读配置注入初值 + settings-page 置 true）
     callback settings-saved(string, string, string); // 助手提示词/用户人设/温度（persona 两页保存；提供商页即时落盘）
     callback settings-back(); // 返回对话（放弃未保存编辑）
+    // —— 标题栏窗控桥（Rust ui/frame.rs 实现拖窗/最小化等原生动作） ——
+    callback win-minimize();
+    callback win-maximize(); // 最大化/还原互换（标题栏按钮与拖拽区双击共用）
+    callback win-drag(); // 拖拽区左键按下 → winit drag_window 原生移窗
 
     // 侧栏初始宽 190px（默认窗口 1120 的 ~17%）；不得引用 root.width，
     // 否则进入 layoutinfo 环。拖动 vsplit 改写 position 后此值即失效
     property <length> side-width: 190px;
+    // 标题栏高：内容块统一下移 caption-height，其下可用高即 content-height
+    property <length> caption-height: 34px;
+    property <length> content-height: root.height - root.caption-height;
 
     // 主三框与设置页整页互斥切换：if-block 销毁重建，对话模型在 Rust 侧
     // （Host 簿记 + 窗口属性）不受影响，生成中切页事件照常回流
     if !root.settings-page : HorizontalLayout {
-        // 多子元素组件里 if-block 不自动撑满：显式全窗，否则底部露馅（"大下巴"）
+        // 多子元素组件里 if-block 不自动撑满：显式铺满内容区（标题栏之下），否则底部露馅（"大下巴"）
+        x: 0;
+        y: root.caption-height;
         width: root.width;
-        height: root.height;
+        height: root.content-height;
         padding: 10px;
         spacing: 0;
 
@@ -229,12 +317,12 @@ export component AppWindow inherits Window {
         }
     }
 
-    // —— 回收站浮层：遮罩 + 居中卡（恢复 / 彻底删除） ——
+    // —— 回收站浮层：遮罩 + 居中卡（恢复 / 彻底删除）。只盖内容区，标题栏在其上层 ——
     if root.trash-open : Rectangle {
         x: 0;
-        y: 0;
+        y: root.caption-height;
         width: root.width;
-        height: root.height;
+        height: root.content-height;
         background: rgba(0, 0, 0, 0.45);
         TouchArea {
             width: parent.width;
@@ -244,9 +332,9 @@ export component AppWindow inherits Window {
     }
     if root.trash-open : Rectangle {
         x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
+        y: root.caption-height + (root.content-height - self.height) / 2;
         width: Math.min(400px, root.width - 60px);
-        height: Math.min(420px, root.height - 40px);
+        height: Math.min(420px, root.content-height - 40px);
         border-radius: 14px;
         border-width: 1px;
         border-color: Theme.p.panelBorder;
@@ -316,8 +404,10 @@ export component AppWindow inherits Window {
 
     // —— 设置整页：与主三框互斥切换，进入即重建；提供商页双向链到本窗口属性 ——
     if root.settings-page : SettingsPage {
+        x: 0;
+        y: root.caption-height;
         width: root.width;
-        height: root.height;
+        height: root.content-height;
         provs: root.provs;
         prov-sel <=> root.prov-sel;
         prov-name <=> root.prov-name;
@@ -354,5 +444,19 @@ export component AppWindow inherits Window {
         status: root.cfg-status;
         saved(sys, persona, temp) => { root.settings-saved(sys, persona, temp); }
         back => { root.settings-back(); }
+    }
+
+    // 标题栏 z 序最后绘制：盖在回收站遮罩之上，任何页面都能窗控
+    CaptionBar {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.caption-height;
+        is-maximized: root.maximized;
+        win-minimize => { root.win-minimize(); }
+        win-maximize => { root.win-maximize(); }
+        // 关闭直接走 WindowItem.close()：触发 close-requested，默认销毁窗口退出事件循环
+        win-close => { root.close(); }
+        win-drag => { root.win-drag(); }
     }
 }
