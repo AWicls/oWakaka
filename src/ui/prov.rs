@@ -1,7 +1,8 @@
 //! 提供商页装配（Step A：providers 整包即时读写，密钥恒不下 UI）。
 //!
-//! 本模块只做「DB 整包 ↔ 窗口属性」的注入与回写，不发网络请求：
-//! 连通测试/远端拉取由 run() 接线取 [`prov_test_config`] 组装的临时视图后异步执行。
+//! 注入与回写只做「DB 整包 ↔ 窗口属性」；连通测试/远端拉取在本模块接线
+//! [`wire_prov`] 中取 [`prov_test_config`] 组装的临时视图后经 runtime 异步发起，
+//! 结果走 ui.rs 的回流 Timer 落回窗口。
 
 use std::rc::Rc;
 
@@ -11,7 +12,7 @@ use crate::ai::{
     providers::{ModelInfo, Providers, join_url},
 };
 use crate::db::Db;
-use slint::{SharedString, VecModel};
+use slint::{ComponentHandle, SharedString, VecModel};
 
 use super::{AppWindow, ModelRow, ProvRow, RemoteRow};
 
@@ -246,4 +247,282 @@ pub(super) fn prov_test_config(db: &Db, window: &AppWindow) -> Option<Config> {
         stream: true,
         models: Default::default(),
     })
+}
+
+/// 提供商页接线：列表/详情即时读写 providers 整包（Step A 骨架）＋
+/// Step B 模型管理（拉远端 / ＋添加 / 自定义 / 别名 / 能力勾选 / 移除）。
+/// 回连按钮均重建客户端缓存（下一次发送即用新配置）。
+pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
+    let db = ctx.db.clone();
+    let cache = ctx.cache.clone();
+    let runtime = ctx.runtime.clone();
+    let tx = ctx.tx.clone();
+
+    window.on_prov_created({
+        let window_weak = window.as_weak();
+        let db = db.clone();
+        move |kind_i| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let kind = if kind_i == 1 {
+                Provider::XiaomiMimo
+            } else {
+                Provider::Custom
+            };
+            match Providers::create(&db, kind) {
+                Ok(id) => prov_inject(&db, &w, &id),
+                Err(e) => w.set_prov_status(format!("新增失败: {e}").into()),
+            }
+        }
+    });
+    window.on_prov_selected({
+        let window_weak = window.as_weak();
+        let db = db.clone();
+        move |id| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            prov_inject(&db, &w, &id);
+            w.set_prov_status(SharedString::default());
+        }
+    });
+    window.on_prov_used({
+        let window_weak = window.as_weak();
+        let cache = cache.clone();
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let id = w.get_prov_sel().to_string();
+            match Providers::set_active(&db, &id) {
+                Ok(()) => {
+                    *cache.lock().unwrap() = None; // 下一次发送即用新提供商
+                    prov_inject(&db, &w, &id);
+                    w.set_prov_status("已切换，下一次发送生效".into());
+                }
+                Err(e) => w.set_prov_status(format!("切换失败: {e}").into()),
+            }
+        }
+    });
+    window.on_prov_saved({
+        let window_weak = window.as_weak();
+        let cache = cache.clone();
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let status = prov_save(&db, &w);
+            *cache.lock().unwrap() = None; // 编辑可能改了使用中的条目，重建客户端
+            w.set_prov_status(status);
+        }
+    });
+    window.on_prov_deleted({
+        let window_weak = window.as_weak();
+        let cache = cache.clone();
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let id = w.get_prov_sel().to_string();
+            if id.is_empty() {
+                return;
+            }
+            match Providers::soft_delete(&db, &id) {
+                Ok(()) => {
+                    *cache.lock().unwrap() = None;
+                    prov_inject(&db, &w, &id); // 留在原条目看"已删除"态
+                }
+                Err(e) => w.set_prov_status(format!("删除失败: {e}").into()),
+            }
+        }
+    });
+    window.on_prov_restored({
+        let window_weak = window.as_weak();
+        let cache = cache.clone();
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let id = w.get_prov_sel().to_string();
+            if id.is_empty() {
+                return;
+            }
+            match Providers::restore(&db, &id) {
+                Ok(()) => {
+                    *cache.lock().unwrap() = None;
+                    prov_inject(&db, &w, &id);
+                }
+                Err(e) => w.set_prov_status(format!("恢复失败: {e}").into()),
+            }
+        }
+    });
+    window.on_prov_purged({
+        let window_weak = window.as_weak();
+        let cache = cache.clone();
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let id = w.get_prov_sel().to_string();
+            if id.is_empty() {
+                return;
+            }
+            match Providers::purge(&db, "config.toml", &id) {
+                Ok(()) => {
+                    *cache.lock().unwrap() = None;
+                    prov_inject(&db, &w, ""); // 条目已没了，回注入兜底选中
+                    w.set_prov_status("已彻底删除".into());
+                }
+                Err(e) => w.set_prov_status(format!("彻底删除失败: {e}").into()),
+            }
+        }
+    });
+    window.on_prov_tested({
+        let window_weak = window.as_weak();
+        let runtime = runtime.clone();
+        let tx = tx.clone();
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let Some(cfg) = prov_test_config(&db, &w) else {
+                return; // 文案已写 prov-status
+            };
+            w.set_prov_status("测试连接中…".into());
+            let client = crate::ai::client::Client::from_config(&cfg);
+            let tx = tx.clone();
+            runtime.spawn(async move {
+                let t = std::time::Instant::now();
+                let msg = match client.list_models().await {
+                    Ok(ids) => format!(
+                        "✓ 连通：{} 个模型，{} ms",
+                        ids.len(),
+                        t.elapsed().as_millis()
+                    ),
+                    Err(e) => {
+                        let brief: String = e.to_string().chars().take(160).collect();
+                        format!("✕ 连接失败: {brief}")
+                    }
+                };
+                let _ = tx.send(super::UiMsg::ProvTest(msg.into()));
+            });
+        }
+    });
+
+    // —— Step B：模型管理（拉远端 + ＋添加 / 自定义 / 别名 / 能力勾选 / 移除） ——
+    window.on_prov_fetch({
+        let window_weak = window.as_weak();
+        let runtime = runtime.clone();
+        let tx = tx.clone();
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let Some(cfg) = prov_test_config(&db, &w) else {
+                return; // 缺 base 等已写 prov-status
+            };
+            w.set_remote_loading(true);
+            let client = crate::ai::client::Client::from_config(&cfg);
+            let tx = tx.clone();
+            runtime.spawn(async move {
+                let result = client.list_models().await.map_err(|e| e.to_string());
+                let _ = tx.send(super::UiMsg::ProvFetch(result));
+            });
+        }
+    });
+    window.on_prov_model_added({
+        let window_weak = window.as_weak();
+        let db = db.clone();
+        move |mid| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            model_upsert(&db, &w, &mid, false, |_| {});
+        }
+    });
+    window.on_prov_model_custom({
+        let window_weak = window.as_weak();
+        let db = db.clone();
+        move |mid, alias| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let mid = mid.trim().to_string();
+            if mid.is_empty() {
+                w.set_prov_status("自定义模型必须填请求名".into());
+                return;
+            }
+            let alias = alias.trim().to_string();
+            model_upsert(&db, &w, &mid, false, |m| m.alias = alias);
+        }
+    });
+    window.on_prov_model_alias({
+        let window_weak = window.as_weak();
+        let db = db.clone();
+        move |mid, alias| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            // 逐字符静默落库：不重建列表 = 保住 TextInput 焦点
+            let alias = alias.trim_start().to_string();
+            model_upsert(&db, &w, &mid, true, |m| m.alias = alias);
+        }
+    });
+    window.on_prov_model_commit({
+        let window_weak = window.as_weak();
+        let db = db.clone();
+        move |_mid| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            // 「完成」收起后统一回刷：名称行标签与模型下拉同步最新别名
+            match Providers::load(&db) {
+                Ok(ps) => prov_models_refresh(&ps, &w),
+                Err(e) => w.set_prov_status(format!("回刷失败: {e}").into()),
+            }
+        }
+    });
+    window.on_prov_model_cap({
+        let window_weak = window.as_weak();
+        let db = db.clone();
+        move |mid, cap, on| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            model_upsert(&db, &w, &mid, false, |m| match cap {
+                0 => m.thinking = on,
+                1 => m.vision = on,
+                2 => m.audio = on,
+                3 => m.video = on,
+                _ => m.tools = on,
+            });
+        }
+    });
+    window.on_prov_model_removed({
+        let window_weak = window.as_weak();
+        let cache = cache.clone();
+        let db = db.clone();
+        move |mid| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let sel = w.get_prov_sel().to_string();
+            if let Err(e) = Providers::remove_model(&db, &sel, &mid) {
+                w.set_prov_status(format!("移除失败: {e}").into());
+                return;
+            }
+            *cache.lock().unwrap() = None;
+            let ps = Providers::load(&db).unwrap_or_default();
+            prov_models_refresh(&ps, &w);
+            remote_mark_added(&w, &mid, false);
+        }
+    });
 }

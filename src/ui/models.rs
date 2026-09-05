@@ -11,7 +11,7 @@ use std::{
 
 use crate::ai::{config::Config, providers::Providers};
 use crate::db::Db;
-use slint::{SharedString, VecModel};
+use slint::{ComponentHandle, SharedString, VecModel};
 
 use super::{AppWindow, ModelItem};
 
@@ -158,4 +158,34 @@ impl ModelsState {
     fn persist_model(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
         Providers::set_active_model(&self.db, id)
     }
+}
+
+/// 模型下拉接线：选择即时生效并回写 config；打开下拉首次异步拉远端 /models。
+pub(super) fn wire_models(window: &AppWindow, ctx: &super::Ctx) {
+    let window_weak = window.as_weak();
+    let models = ctx.models.clone();
+    window.on_model_picked(move |id| {
+        if let Some(w) = window_weak.upgrade() {
+            models.pick(&w, id.to_string());
+        }
+    });
+    let models = ctx.models.clone();
+    let runtime = ctx.runtime.clone();
+    let cache = ctx.cache.clone();
+    let tx = ctx.tx.clone();
+    let db = ctx.db.clone();
+    window.on_models_requested(move || {
+        if models.fetched.get() {
+            return; // 已成功拉取过，不重复请求
+        }
+        let Ok(client) = super::ensure_client(&cache, &db) else {
+            return; // 配置缺失：下拉仍可用 config 清单，不打扰
+        };
+        models.fetched.set(true);
+        let tx = tx.clone();
+        runtime.spawn(async move {
+            let result = client.list_models().await.map_err(|e| e.to_string());
+            let _ = tx.send(super::UiMsg::Models(result));
+        });
+    });
 }

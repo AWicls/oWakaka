@@ -1,4 +1,5 @@
 //! 多会话簿记：侧栏数据、每会话消息模型与生成轮次、可见/生成状态切换、SQLite 写穿。
+//! 兼管会话栏接线 [`wire_sidebar`]（新建/切换/删除/回收站）与 [`refresh_trash`]。
 //!
 //! 「可见」（窗口的 messages 属性）与「生成中轮次」（runs）彻底解耦，流式事件
 //! 自带 (sid, gen_id) 路由：生成中切换/新建不串会话，多会话可并行生成。
@@ -11,12 +12,12 @@ use std::{
     rc::Rc,
 };
 
-use slint::{Model, SharedString, VecModel};
+use slint::{ComponentHandle, Model, SharedString, VecModel};
 
 use crate::ai::client::{TurnEvent, TurnHandle};
 use crate::db::{Db, LoadedMessage, LoadedSession, MessagePayload};
 
-use super::{AppWindow, ChatMessage, SessionItem};
+use super::{AppWindow, ChatMessage, SessionItem, TrashItem};
 
 /// 「哪个会话的哪一轮生成」定位对：回流事件据此写回原会话、并丢弃过期轮次。
 #[derive(Clone, Copy)]
@@ -363,6 +364,107 @@ fn derive_title(text: &str) -> SharedString {
     } else {
         title.into()
     }
+}
+
+/// 回收站列表重注入（侧栏按钮计数与浮层同源）。
+pub(super) fn refresh_trash(db: &Db, window: &AppWindow) {
+    let rows: Vec<TrashItem> = db
+        .list_deleted()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, title)| TrashItem {
+            id: id as i32,
+            title: title.into(),
+        })
+        .collect();
+    window.set_trash_list(Rc::new(VecModel::from(rows)).into());
+}
+
+/// 会话栏接线：新建/切换/删除/回收站（restore/purge）。删除只换「当前可见」模型与按钮态，
+/// 流式增量按 sid 回原会话（路由在 ui.rs 的 Timer）。
+pub(super) fn wire_sidebar(window: &AppWindow, ctx: &super::Ctx) {
+    let db = ctx.db.clone();
+    let host = ctx.host.clone();
+
+    let window_weak = window.as_weak();
+    window.on_new_session({
+        let host = host.clone();
+        move || {
+            if let Some(w) = window_weak.upgrade() {
+                host.new_session(&w);
+            }
+        }
+    });
+    let window_weak = window.as_weak();
+    window.on_select_session({
+        let host = host.clone();
+        move |i| {
+            if let Some(w) = window_weak.upgrade() {
+                host.select(i.max(0) as usize, &w);
+            }
+        }
+    });
+    let window_weak = window.as_weak();
+    window.on_session_delete({
+        let host = host.clone();
+        let db = db.clone();
+        move |i| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            host.delete_session(i.max(0) as usize, &w);
+            refresh_trash(&db, &w);
+        }
+    });
+    let window_weak = window.as_weak();
+    window.on_trash_requested({
+        let db = db.clone();
+        move || {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            refresh_trash(&db, &w);
+            w.set_trash_open(true);
+        }
+    });
+    let window_weak = window.as_weak();
+    window.on_trash_closed(move || {
+        if let Some(w) = window_weak.upgrade() {
+            w.set_trash_open(false);
+        }
+    });
+    let window_weak = window.as_weak();
+    window.on_trash_restore({
+        let host = host.clone();
+        let db = db.clone();
+        move |id| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            let sid = id as i64;
+            match db.restore_session(sid).and_then(|()| db.load_session(sid)) {
+                Ok(Some(s)) => {
+                    host.push_restored(s);
+                    refresh_trash(&db, &w);
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("恢复会话失败: {e}"),
+            }
+        }
+    });
+    let window_weak = window.as_weak();
+    window.on_trash_purge({
+        let db = db.clone();
+        move |id| {
+            let Some(w) = window_weak.upgrade() else {
+                return;
+            };
+            if let Err(e) = db.purge_session(id as i64) {
+                eprintln!("彻底删除失败: {e}");
+            }
+            refresh_trash(&db, &w);
+        }
+    });
 }
 
 #[cfg(test)]

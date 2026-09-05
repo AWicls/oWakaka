@@ -22,12 +22,13 @@
 //! 主线程排空、按 sid 路由写回原会话气泡——UI 更新始终发生在主线程。
 //!
 //! # 文件结构
-//! - `ui.rs`（本文件）：入口 [`run`]——构建窗口、接线回调、Timer 事件路由
-//! - `ui/host.rs`：多会话簿记（侧栏、可见会话、生成轮次与取消句柄）
+//! - `ui.rs`（本文件）：共享句柄 [`Ctx`]、入口 [`run`]（构建窗口 + 按页接线 + 事件循环）、
+//!   对话核心接线 `wire_chat`/`wire_timer` 与懒建客户端 `ensure_client`
+//! - `ui/host.rs`：多会话簿记 + 会话栏接线 `wire_sidebar`（侧栏/回收站）+ `refresh_trash`
 //! - `ui/bubbles.rs`：气泡模型操作（增量合并、思考折叠、历史投影）
-//! - `ui/models.rs`：模型下拉状态机（清单/激活/别名/能力）
-//! - `ui/prov.rs`：提供商页装配（providers 整包 ↔ 窗口属性）
-//! - `ui/settings.rs`：设置页保存（角色设定 → persona 活跃行）
+//! - `ui/models.rs`：模型下拉状态机 `ModelsState` + 接线 `wire_models`
+//! - `ui/prov.rs`：提供商页装配（providers 整包 ↔ 窗口）+ 接线 `wire_prov`
+//! - `ui/settings.rs`：设置页保存 + 接线 `wire_settings`
 
 mod bubbles;
 mod host;
@@ -43,7 +44,6 @@ use std::{
 
 use crate::ai::{
     client::{Client, TurnEvent, TurnOptions, TurnPersona},
-    provider::Provider,
     providers::Providers,
 };
 use crate::db::Db;
@@ -52,10 +52,6 @@ use slint::{Model, SharedString, Timer, TimerMode, VecModel};
 use bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history};
 use host::{Host, RunRef, StreamMsg};
 use models::ModelsState;
-use prov::{
-    model_upsert, prov_inject, prov_models_refresh, prov_save, prov_test_config, remote_mark_added,
-};
-use settings::save_personas;
 
 slint::include_modules!();
 
@@ -73,9 +69,19 @@ enum UiMsg {
     ProvFetch(Result<Vec<String>, String>),
 }
 
-// —— 页面装配逻辑已下沉：models.rs / settings.rs / prov.rs ——
+/// 各页接线共享的句柄束：run() 建一次，wire_* 从中按闭包再 clone。
+/// 字段私有但整个 ui 模块树可读（子模块是本模块的后代）。
+#[derive(Clone)]
+struct Ctx {
+    db: Rc<Db>,
+    host: Host,
+    models: ModelsState,
+    runtime: Arc<tokio::runtime::Runtime>,
+    tx: mpsc::Sender<UiMsg>,
+    cache: ClientCache,
+}
 
-/// UI 主入口：构建窗口、接线交互、运行 Slint 事件循环直到窗口关闭。
+/// UI 主入口：构建窗口、组 Ctx、按页接线、运行 Slint 事件循环直到窗口关闭。
 ///
 /// 这是 ui 模块唯一的公开接口，由 `main.rs` 转发调用。
 pub fn run() -> Result<(), slint::PlatformError> {
@@ -110,7 +116,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             }
         });
     }
-    refresh_trash(&db, &window);
+    host::refresh_trash(&db, &window);
 
     let models = ModelsState::from_config(db.clone());
     models.apply(&window);
@@ -119,88 +125,74 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let (tx, rx) = mpsc::channel::<UiMsg>();
     let cache: ClientCache = Arc::new(Mutex::new(None));
 
-    // —— 会话栏：新建/切换只换"当前可见"模型与按钮态；流式增量按 sid 回原会话 ——
-    {
-        let window_weak = window.as_weak();
-        window.on_new_session({
-            let host = host.clone();
-            move || {
-                if let Some(w) = window_weak.upgrade() {
-                    host.new_session(&w);
-                }
-            }
-        });
-        let window_weak = window.as_weak();
-        window.on_select_session({
-            let host = host.clone();
-            move |i| {
-                if let Some(w) = window_weak.upgrade() {
-                    host.select(i.max(0) as usize, &w);
-                }
-            }
-        });
-        let window_weak = window.as_weak();
-        window.on_session_delete({
-            let host = host.clone();
-            let db = db.clone();
-            move |i| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                host.delete_session(i.max(0) as usize, &w);
-                refresh_trash(&db, &w);
-            }
-        });
-        let window_weak = window.as_weak();
-        window.on_trash_requested({
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                refresh_trash(&db, &w);
-                w.set_trash_open(true);
-            }
-        });
-        let window_weak = window.as_weak();
-        window.on_trash_closed(move || {
-            if let Some(w) = window_weak.upgrade() {
-                w.set_trash_open(false);
-            }
-        });
-        let window_weak = window.as_weak();
-        window.on_trash_restore({
-            let host = host.clone();
-            let db = db.clone();
-            move |id| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let sid = id as i64;
-                match db.restore_session(sid).and_then(|()| db.load_session(sid)) {
-                    Ok(Some(s)) => {
-                        host.push_restored(s);
-                        refresh_trash(&db, &w);
-                    }
-                    Ok(None) => {}
-                    Err(e) => eprintln!("恢复会话失败: {e}"),
-                }
-            }
-        });
-        let window_weak = window.as_weak();
-        window.on_trash_purge({
-            let db = db.clone();
-            move |id| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                if let Err(e) = db.purge_session(id as i64) {
-                    eprintln!("彻底删除失败: {e}");
-                }
-                refresh_trash(&db, &w);
-            }
-        });
+    let ctx = Ctx {
+        db,
+        host,
+        models,
+        runtime,
+        tx,
+        cache,
+    };
+
+    // —— 接线：每页一块；会话核心（发送/停止/回流）留在本文件，页面归各子模块 ——
+    host::wire_sidebar(&window, &ctx);
+    wire_chat(&window, &ctx);
+
+    models::wire_models(&window, &ctx);
+
+    settings::wire_settings(&window, &ctx);
+
+    prov::wire_prov(&window, &ctx);
+
+    // —— 复制路径：Slint 无剪贴板 API，经 arboard 写系统剪贴板 ——
+    window.on_copy(move |text| {
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text.to_string());
+        }
+    });
+
+    // —— 回流路径：Timer 排空事件队列，按 (sid, gen) 路由写回发起会话 ——
+    wire_timer(&window, &ctx, rx);
+
+    window.show()?;
+    slint::run_event_loop()?;
+    Ok(())
+}
+
+/// 每次发送现读 DB 活跃角色行组装轮次人设（毫秒级，读失败按无角色处理不阻断发送）。
+/// 助手/用户两段提示词与温度全空 → `None`（请求与旧行为逐位一致）。
+fn persona_for_turn(db: &Db) -> Option<TurnPersona> {
+    let a = db.active_persona("assistant").ok().flatten();
+    let u = db.active_persona("user").ok().flatten();
+    let p = TurnPersona {
+        system_prompt: a
+            .as_ref()
+            .map_or_else(String::new, |x| x.system_prompt.clone()),
+        user_persona: u.map_or_else(String::new, |x| x.system_prompt),
+        temperature: a.as_ref().and_then(|x| x.temperature),
+    };
+    (!p.is_empty()).then_some(p)
+}
+
+/// 取（必要时懒建）客户端；`Err` 携带可直接展示的文案。
+/// 请求组装/取消编排已下沉至 [`Client::spawn_turn`](crate::ai::client::Client::spawn_turn)。
+fn ensure_client(cache: &ClientCache, db: &Db) -> Result<Arc<Client>, String> {
+    let mut guard = cache.lock().unwrap();
+    if guard.is_none() {
+        let client = Client::load(db).map_err(|e| format!("读取配置失败: {e}"))?;
+        *guard = Some(Arc::new(client));
     }
+    Ok(guard.as_ref().unwrap().clone())
+}
+
+/// 对话核心接线：发送（贴气泡 → 快照历史 → 后台轮）、停止、思考开关。
+fn wire_chat(window: &AppWindow, ctx: &Ctx) {
+    let db = ctx.db.clone();
+    let host = ctx.host.clone();
+    let models = ctx.models.clone();
+    let runtime = ctx.runtime.clone();
+    let tx = ctx.tx.clone();
+    let cache = ctx.cache.clone();
 
     // —— 发送路径：贴用户气泡 → 快照历史 → 后台请求（方式按配置分发） ——
     {
@@ -298,504 +290,96 @@ pub fn run() -> Result<(), slint::PlatformError> {
             }
         });
     }
+}
 
-    // —— 模型切换：选择即时生效并回写 config；打开下拉首次异步拉远端 /models ——
-    {
-        let window_weak = window.as_weak();
-        window.on_model_picked({
-            let models = models.clone();
-            move |id| {
-                if let Some(w) = window_weak.upgrade() {
-                    models.pick(&w, id.to_string());
+/// 回流接线：Timer 排空事件队列，按 (sid, gen) 路由写回发起会话。
+fn wire_timer(window: &AppWindow, ctx: &Ctx, rx: mpsc::Receiver<UiMsg>) {
+    let window_weak = window.as_weak();
+    let timer_host = ctx.host.clone();
+    let timer_models = ctx.models.clone();
+    let timer = Timer::default();
+    timer.start(TimerMode::Repeated, Duration::from_millis(30), move || {
+        let Some(window) = window_weak.upgrade() else {
+            return;
+        };
+        for msg in rx.try_iter() {
+            let StreamMsg { run, event } = match msg {
+                UiMsg::Turn(s) => s,
+                UiMsg::Models(Ok(ids)) => {
+                    // 远端清单并入下拉（去重保序），失败重试留待下回打开
+                    timer_models.rebuild(Some(&ids));
+                    timer_models.apply(&window);
+                    continue;
+                }
+                UiMsg::Models(Err(e)) => {
+                    eprintln!("拉取远端模型清单失败: {e}");
+                    timer_models.fetched.set(false);
+                    continue;
+                }
+                UiMsg::ProvTest(msg) => {
+                    window.set_prov_status(msg);
+                    continue;
+                }
+                UiMsg::ProvFetch(Ok(ids)) => {
+                    let have: Vec<SharedString> = window
+                        .get_prov_models()
+                        .iter()
+                        .map(|m| m.id.clone())
+                        .collect();
+                    let mut rows: Vec<RemoteRow> = ids
+                        .into_iter()
+                        .map(|id| RemoteRow {
+                            added: have.iter().any(|h| h == &id),
+                            id: id.into(),
+                        })
+                        .collect();
+                    rows.sort_by(|a, b| a.added.cmp(&b.added).then(a.id.cmp(&b.id)));
+                    window.set_remote_models(Rc::new(VecModel::from(rows)).into());
+                    window.set_remote_loading(false);
+                    continue;
+                }
+                UiMsg::ProvFetch(Err(e)) => {
+                    window.set_remote_loading(false);
+                    let brief: String = e.chars().take(160).collect();
+                    window.set_prov_status(format!("✕ 拉取失败: {brief}").into());
+                    continue;
+                }
+            };
+            // 该会话已停止/重发（gen_id 前进过）：旧轮迟到事件一律丢弃
+            {
+                let runs = timer_host.runs.borrow();
+                let Some(state) = runs.get(run.sid) else {
+                    continue;
+                };
+                if state.gen_id != run.gen_id {
+                    continue;
                 }
             }
-        });
-        window.on_models_requested({
-            let runtime = runtime.clone();
-            let cache = cache.clone();
-            let tx = tx.clone();
-            let models = models.clone();
-            let db = db.clone();
-            move || {
-                if models.fetched.get() {
-                    return; // 已成功拉取过，不重复请求
-                }
-                let Ok(client) = ensure_client(&cache, &db) else {
-                    return; // 配置缺失：下拉仍可用 config 清单，不打扰
-                };
-                models.fetched.set(true);
-                let tx = tx.clone();
-                runtime.spawn(async move {
-                    let result = client.list_models().await.map_err(|e| e.to_string());
-                    let _ = tx.send(UiMsg::Models(result));
-                });
-            }
-        });
-    }
-
-    // —— 设置整页：进入注入提供商档案 + persona 初值；保存 = persona 两页 ——
-    {
-        window.on_settings_requested({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                prov_inject(&db, &w, "");
-                w.set_prov_status(SharedString::default());
-                // 角色设定初值：persona 活跃行（读不到/未设定 = 空白 + 温度空串）
-                if let Ok(Some(a)) = db.active_persona("assistant") {
-                    w.set_cfg_system_prompt(a.system_prompt.into());
-                    w.set_cfg_temperature(
-                        a.temperature
-                            .map_or_else(String::new, |t| format!("{t}"))
-                            .into(),
-                    );
-                }
-                if let Ok(Some(u)) = db.active_persona("user") {
-                    w.set_cfg_user_persona(u.system_prompt.into());
-                }
-                w.set_cfg_status(SharedString::default());
-                w.set_settings_page(true);
-            }
-        });
-        window.on_settings_back({
-            let window_weak = window.as_weak();
-            let models = models.clone();
-            move || {
-                if let Some(w) = window_weak.upgrade() {
-                    w.set_settings_page(false);
-                    // 提供商/模型/能力可能在页内改过：回对话前重拉一次数据源
-                    models.sync_store(&w);
-                }
-            }
-        });
-        window.on_settings_saved({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |sys_prompt, user_persona, temp| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let status = save_personas(&db, &sys_prompt, &user_persona, &temp);
-                w.set_cfg_status(status);
-                // 整页设置不自动跳回，留在本页回显成功/失败；用户点「返回」退出
-            }
-        });
-    }
-
-    // —— 提供商页：列表/详情即时读写 providers 整包（Step A 骨架） ——
-    {
-        window.on_prov_created({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |kind_i| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let kind = if kind_i == 1 {
-                    Provider::XiaomiMimo
-                } else {
-                    Provider::Custom
-                };
-                match Providers::create(&db, kind) {
-                    Ok(id) => prov_inject(&db, &w, &id),
-                    Err(e) => w.set_prov_status(format!("新增失败: {e}").into()),
-                }
-            }
-        });
-        window.on_prov_selected({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |id| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                prov_inject(&db, &w, &id);
-                w.set_prov_status(SharedString::default());
-            }
-        });
-        window.on_prov_used({
-            let window_weak = window.as_weak();
-            let cache = cache.clone();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let id = w.get_prov_sel().to_string();
-                match Providers::set_active(&db, &id) {
-                    Ok(()) => {
-                        *cache.lock().unwrap() = None; // 下一次发送即用新提供商
-                        prov_inject(&db, &w, &id);
-                        w.set_prov_status("已切换，下一次发送生效".into());
+            let model = timer_host.models.borrow()[run.sid].clone();
+            match event {
+                TurnEvent::Reasoning(t) => append_part(&model, true, &t),
+                TurnEvent::Content(t) => append_part(&model, false, &t),
+                TurnEvent::Done => {
+                    fold_tail(&model); // 兜底：纯思考回复也要收起
+                    timer_host.runs.borrow_mut()[run.sid].cancel = None;
+                    timer_host.persist_turn(run.sid);
+                    if run.sid == timer_host.current.get() {
+                        window.set_generating(false);
                     }
-                    Err(e) => w.set_prov_status(format!("切换失败: {e}").into()),
                 }
-            }
-        });
-        window.on_prov_saved({
-            let window_weak = window.as_weak();
-            let cache = cache.clone();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let status = prov_save(&db, &w);
-                *cache.lock().unwrap() = None; // 编辑可能改了使用中的条目，重建客户端
-                w.set_prov_status(status);
-            }
-        });
-        window.on_prov_deleted({
-            let window_weak = window.as_weak();
-            let cache = cache.clone();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let id = w.get_prov_sel().to_string();
-                if id.is_empty() {
-                    return;
-                }
-                match Providers::soft_delete(&db, &id) {
-                    Ok(()) => {
-                        *cache.lock().unwrap() = None;
-                        prov_inject(&db, &w, &id); // 留在原条目看"已删除"态
+                TurnEvent::Error(e) => {
+                    // 错误详情截断，防止超长网关响应体撑爆气泡
+                    let brief: String = e.chars().take(300).collect();
+                    append_part(&model, false, &format!("\n[出错] {brief}"));
+                    timer_host.runs.borrow_mut()[run.sid].cancel = None;
+                    timer_host.persist_turn(run.sid);
+                    if run.sid == timer_host.current.get() {
+                        window.set_generating(false);
                     }
-                    Err(e) => w.set_prov_status(format!("删除失败: {e}").into()),
                 }
             }
-        });
-        window.on_prov_restored({
-            let window_weak = window.as_weak();
-            let cache = cache.clone();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let id = w.get_prov_sel().to_string();
-                if id.is_empty() {
-                    return;
-                }
-                match Providers::restore(&db, &id) {
-                    Ok(()) => {
-                        *cache.lock().unwrap() = None;
-                        prov_inject(&db, &w, &id);
-                    }
-                    Err(e) => w.set_prov_status(format!("恢复失败: {e}").into()),
-                }
-            }
-        });
-        window.on_prov_purged({
-            let window_weak = window.as_weak();
-            let cache = cache.clone();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let id = w.get_prov_sel().to_string();
-                if id.is_empty() {
-                    return;
-                }
-                match Providers::purge(&db, "config.toml", &id) {
-                    Ok(()) => {
-                        *cache.lock().unwrap() = None;
-                        prov_inject(&db, &w, ""); // 条目已没了，回注入兜底选中
-                        w.set_prov_status("已彻底删除".into());
-                    }
-                    Err(e) => w.set_prov_status(format!("彻底删除失败: {e}").into()),
-                }
-            }
-        });
-        window.on_prov_tested({
-            let window_weak = window.as_weak();
-            let runtime = runtime.clone();
-            let tx = tx.clone();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let Some(cfg) = prov_test_config(&db, &w) else {
-                    return; // 文案已写 prov-status
-                };
-                w.set_prov_status("测试连接中…".into());
-                let client = Client::from_config(&cfg);
-                let tx = tx.clone();
-                runtime.spawn(async move {
-                    let t = std::time::Instant::now();
-                    let msg = match client.list_models().await {
-                        Ok(ids) => format!(
-                            "✓ 连通：{} 个模型，{} ms",
-                            ids.len(),
-                            t.elapsed().as_millis()
-                        ),
-                        Err(e) => {
-                            let brief: String = e.to_string().chars().take(160).collect();
-                            format!("✕ 连接失败: {brief}")
-                        }
-                    };
-                    let _ = tx.send(UiMsg::ProvTest(msg.into()));
-                });
-            }
-        });
-
-        // —— Step B：模型管理（拉远端 + ＋添加 / 自定义 / 别名 / 能力勾选 / 移除） ——
-        window.on_prov_fetch({
-            let window_weak = window.as_weak();
-            let runtime = runtime.clone();
-            let tx = tx.clone();
-            let db = db.clone();
-            move || {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let Some(cfg) = prov_test_config(&db, &w) else {
-                    return; // 缺 base 等已写 prov-status
-                };
-                w.set_remote_loading(true);
-                let client = Client::from_config(&cfg);
-                let tx = tx.clone();
-                runtime.spawn(async move {
-                    let result = client.list_models().await.map_err(|e| e.to_string());
-                    let _ = tx.send(UiMsg::ProvFetch(result));
-                });
-            }
-        });
-        window.on_prov_model_added({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |mid| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                model_upsert(&db, &w, &mid, false, |_| {});
-            }
-        });
-        window.on_prov_model_custom({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |mid, alias| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let mid = mid.trim().to_string();
-                if mid.is_empty() {
-                    w.set_prov_status("自定义模型必须填请求名".into());
-                    return;
-                }
-                let alias = alias.trim().to_string();
-                model_upsert(&db, &w, &mid, false, |m| m.alias = alias);
-            }
-        });
-        window.on_prov_model_alias({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |mid, alias| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                // 逐字符静默落库：不重建列表 = 保住 TextInput 焦点
-                let alias = alias.trim_start().to_string();
-                model_upsert(&db, &w, &mid, true, |m| m.alias = alias);
-            }
-        });
-        window.on_prov_model_commit({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |_mid| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                // 「完成」收起后统一回刷：名称行标签与模型下拉同步最新别名
-                match Providers::load(&db) {
-                    Ok(ps) => prov_models_refresh(&ps, &w),
-                    Err(e) => w.set_prov_status(format!("回刷失败: {e}").into()),
-                }
-            }
-        });
-        window.on_prov_model_cap({
-            let window_weak = window.as_weak();
-            let db = db.clone();
-            move |mid, cap, on| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                model_upsert(&db, &w, &mid, false, |m| match cap {
-                    0 => m.thinking = on,
-                    1 => m.vision = on,
-                    2 => m.audio = on,
-                    3 => m.video = on,
-                    _ => m.tools = on,
-                });
-            }
-        });
-        window.on_prov_model_removed({
-            let window_weak = window.as_weak();
-            let cache = cache.clone();
-            let db = db.clone();
-            move |mid| {
-                let Some(w) = window_weak.upgrade() else {
-                    return;
-                };
-                let sel = w.get_prov_sel().to_string();
-                if let Err(e) = Providers::remove_model(&db, &sel, &mid) {
-                    w.set_prov_status(format!("移除失败: {e}").into());
-                    return;
-                }
-                *cache.lock().unwrap() = None;
-                let ps = Providers::load(&db).unwrap_or_default();
-                prov_models_refresh(&ps, &w);
-                remote_mark_added(&w, &mid, false);
-            }
-        });
-    }
-
-    // —— 复制路径：Slint 无剪贴板 API，经 arboard 写系统剪贴板 ——
-    window.on_copy(move |text| {
-        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-            let _ = clipboard.set_text(text.to_string());
         }
     });
-
-    // —— 回流路径：Timer 排空事件队列，按 (sid, gen) 路由写回发起会话 ——
-    {
-        let window_weak = window.as_weak();
-        let timer_host = host.clone();
-        let timer_models = models.clone();
-        let timer = Timer::default();
-        timer.start(TimerMode::Repeated, Duration::from_millis(30), move || {
-            let Some(window) = window_weak.upgrade() else {
-                return;
-            };
-            for msg in rx.try_iter() {
-                let StreamMsg { run, event } = match msg {
-                    UiMsg::Turn(s) => s,
-                    UiMsg::Models(Ok(ids)) => {
-                        // 远端清单并入下拉（去重保序），失败重试留待下回打开
-                        timer_models.rebuild(Some(&ids));
-                        timer_models.apply(&window);
-                        continue;
-                    }
-                    UiMsg::Models(Err(e)) => {
-                        eprintln!("拉取远端模型清单失败: {e}");
-                        timer_models.fetched.set(false);
-                        continue;
-                    }
-                    UiMsg::ProvTest(msg) => {
-                        window.set_prov_status(msg);
-                        continue;
-                    }
-                    UiMsg::ProvFetch(Ok(ids)) => {
-                        let have: Vec<SharedString> = window
-                            .get_prov_models()
-                            .iter()
-                            .map(|m| m.id.clone())
-                            .collect();
-                        let mut rows: Vec<RemoteRow> = ids
-                            .into_iter()
-                            .map(|id| RemoteRow {
-                                added: have.iter().any(|h| h == &id),
-                                id: id.into(),
-                            })
-                            .collect();
-                        rows.sort_by(|a, b| a.added.cmp(&b.added).then(a.id.cmp(&b.id)));
-                        window.set_remote_models(Rc::new(VecModel::from(rows)).into());
-                        window.set_remote_loading(false);
-                        continue;
-                    }
-                    UiMsg::ProvFetch(Err(e)) => {
-                        window.set_remote_loading(false);
-                        let brief: String = e.chars().take(160).collect();
-                        window.set_prov_status(format!("✕ 拉取失败: {brief}").into());
-                        continue;
-                    }
-                };
-                // 该会话已停止/重发（gen_id 前进过）：旧轮迟到事件一律丢弃
-                {
-                    let runs = timer_host.runs.borrow();
-                    let Some(state) = runs.get(run.sid) else {
-                        continue;
-                    };
-                    if state.gen_id != run.gen_id {
-                        continue;
-                    }
-                }
-                let model = timer_host.models.borrow()[run.sid].clone();
-                match event {
-                    TurnEvent::Reasoning(t) => append_part(&model, true, &t),
-                    TurnEvent::Content(t) => append_part(&model, false, &t),
-                    TurnEvent::Done => {
-                        fold_tail(&model); // 兜底：纯思考回复也要收起
-                        timer_host.runs.borrow_mut()[run.sid].cancel = None;
-                        timer_host.persist_turn(run.sid);
-                        if run.sid == timer_host.current.get() {
-                            window.set_generating(false);
-                        }
-                    }
-                    TurnEvent::Error(e) => {
-                        // 错误详情截断，防止超长网关响应体撑爆气泡
-                        let brief: String = e.chars().take(300).collect();
-                        append_part(&model, false, &format!("\n[出错] {brief}"));
-                        timer_host.runs.borrow_mut()[run.sid].cancel = None;
-                        timer_host.persist_turn(run.sid);
-                        if run.sid == timer_host.current.get() {
-                            window.set_generating(false);
-                        }
-                    }
-                }
-            }
-        });
-        // 定时器与应用同生命周期，故意泄漏（进程退出即回收）
-        std::mem::forget(timer);
-    }
-
-    window.show()?;
-    slint::run_event_loop()?;
-    Ok(())
-}
-
-/// 回收站列表重注入（侧栏按钮计数与浮层同源）。
-fn refresh_trash(db: &Db, window: &AppWindow) {
-    let rows: Vec<TrashItem> = db
-        .list_deleted()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(id, title)| TrashItem {
-            id: id as i32,
-            title: title.into(),
-        })
-        .collect();
-    window.set_trash_list(Rc::new(VecModel::from(rows)).into());
-}
-
-/// 每次发送现读 DB 活跃角色行组装轮次人设（毫秒级，读失败按无角色处理不阻断发送）。
-/// 助手/用户两段提示词与温度全空 → `None`（请求与旧行为逐位一致）。
-fn persona_for_turn(db: &Db) -> Option<TurnPersona> {
-    let a = db.active_persona("assistant").ok().flatten();
-    let u = db.active_persona("user").ok().flatten();
-    let p = TurnPersona {
-        system_prompt: a
-            .as_ref()
-            .map_or_else(String::new, |x| x.system_prompt.clone()),
-        user_persona: u.map_or_else(String::new, |x| x.system_prompt),
-        temperature: a.as_ref().and_then(|x| x.temperature),
-    };
-    (!p.is_empty()).then_some(p)
-}
-
-/// 取（必要时懒建）客户端；`Err` 携带可直接展示的文案。
-/// 请求组装/取消编排已下沉至 [`Client::spawn_turn`](crate::ai::client::Client::spawn_turn)。
-fn ensure_client(cache: &ClientCache, db: &Db) -> Result<Arc<Client>, String> {
-    let mut guard = cache.lock().unwrap();
-    if guard.is_none() {
-        let client = Client::load(db).map_err(|e| format!("读取配置失败: {e}"))?;
-        *guard = Some(Arc::new(client));
-    }
-    Ok(guard.as_ref().unwrap().clone())
+    // 定时器与应用同生命周期，故意泄漏（进程退出即回收）
+    std::mem::forget(timer);
 }
