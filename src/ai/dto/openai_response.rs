@@ -1,5 +1,9 @@
 //! OpenAI Responses API（`/responses` 端点族）线格式。
-//! 占位模块：本阶段（chat 兼容闭环）不参与任何通信路径，后续增量再实现。
+//!
+//! 与 chat 族三点不同：请求体是 `input`（非 `messages`）、
+//! 非流式响应是 `output` 条目数组（非 `choices`）、
+//! 流式是带 `type` 的语义事件（非 chunk 增量）。
 
+pub mod event;
 pub mod request;
 pub mod response;
