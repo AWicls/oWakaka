@@ -8,6 +8,11 @@
 ## [Unreleased]
 
 ### Added
+- SQLite 会话持久化（DB-1，`data/owakaka.db`，rusqlite bundled）：
+  - 新模块 `db`：混合式表（查询字段成列 + `payload` JSON 叶子），session/message 两表；`persona_id`、`origin` 预埋列；时间戳 SQLite 生成 RFC3339 UTC；`user_version` 不匹配即整库重建（开发期策略，无 backfill）
+  - 落库时机：发送即写 user 消息、轮次收尾（Done/Error/停止）写 assistant 终稿一条（流式增量不落库）；会话标题首答后同步；重启后侧栏与气泡（含思考折叠态）按原样恢复，默认可见 = 最近活动会话
+  - 降级路径：库打开失败回落内存库、单条读写失败仅记日志，均不阻断对话；`data/` 进 .gitignore
+  - 测试：文件库"重启往返"/payload 缺省容错 doctest 2 + 旧版本重建/会话内序号 单测 2
 - UI 模型切换与程序内设置弹窗：
   - 输入区左下角新增模型按钮（Thinking 左侧）：点击向上弹出清单 = config `[models]` 别名 ∪ 远端 `GET /models`（首次打开异步拉取，失败下回重试），选中即切换激活模型（后续发送携带）并回写 `config.toml model` 字段
   - 会话栏左下角新增设置按钮（主题按钮旁，滑杆图标）：打开程序内居中弹窗（遮罩点击关闭），可编辑并落盘 提供商（通用兼容/小米 MiMo 二选一）、API 根地址、API 密钥（留空=不改）、激活模型；校验不过不落盘并在弹窗内回显错误，保存成功后客户端缓存失效、下一次发送即用新配置

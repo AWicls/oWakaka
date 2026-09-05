@@ -8,8 +8,11 @@
 config.test.toml
 config.toml
 
-# 本地数据库文件
+# 本地数据库文件（对话内容属隐私，且 WAL 边车文件 *.db-wal/*.db-shm 不被 *.db 匹配）
+data/
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 

@@ -1,8 +1,10 @@
-//! 多会话簿记：侧栏数据、每会话消息模型与生成轮次、可见/生成状态切换。
+//! 多会话簿记：侧栏数据、每会话消息模型与生成轮次、可见/生成状态切换、SQLite 写穿。
 //!
 //! 「可见」（窗口的 messages 属性）与「生成中轮次」（runs）彻底解耦，流式事件
 //! 自带 (sid, gen_id) 路由：生成中切换/新建不串会话，多会话可并行生成。
 //! 全部只在主线程触碰（Rc/RefCell 即够），由 `ui::run` 的各回调驱动。
+//! `db_ids` 与各列表平行下标，存放各行在 [`crate::db`] 中的 rowid；落库时机 =
+//! 发送即写 user 消息、轮次收尾（Done/Error/停止）写 assistant 终稿，流式增量不落库。
 
 use std::{
     cell::{Cell, RefCell},
@@ -12,6 +14,7 @@ use std::{
 use slint::{Model, SharedString, VecModel};
 
 use crate::ai::client::{TurnEvent, TurnHandle};
+use crate::db::{Db, LoadedMessage, MessagePayload};
 
 use super::{AppWindow, ChatMessage, SessionItem};
 
@@ -34,21 +37,27 @@ pub(super) struct StreamMsg {
 const NEW_TITLE: &str = "新对话";
 
 /// 一次会话的生成簿记：`gen_id` 每次发送递增（旧轮迟到事件据此丢弃）；
-/// `cancel` 仅在该会话生成中为 `Some`（取出即 [`TurnHandle::cancel`]）。
+/// `cancel` 仅在该会话生成中为 `Some`（取出即 [`TurnHandle::cancel`]）；
+/// `model` 为本轮发送时的激活模型（收尾终稿落库用，防生成中切模型记错）。
 pub(super) struct RunState {
     pub(super) gen_id: u64,
     pub(super) cancel: Option<TurnHandle>,
+    pub(super) model: String,
 }
 
 /// UI 侧多会话状态：各回调共享（[`Host`] 按引用克隆进闭包）。
 #[derive(Clone)]
 pub(super) struct Host {
+    /// SQLite 句柄：主线程同步读写，失败只记日志不阻断 UI
+    pub(super) db: Rc<Db>,
     /// 侧栏数据源（标题 + 选中态），直接交给 Slint 模型
     pub(super) items: Rc<VecModel<SessionItem>>,
     /// 每会话一个消息模型，与 `items` 同下标
     pub(super) models: Rc<RefCell<Vec<Rc<VecModel<ChatMessage>>>>>,
     /// 每会话一个轮次簿记，与 `items` 同下标
     pub(super) runs: Rc<RefCell<Vec<RunState>>>,
+    /// 每会话的 DB rowid，与 `items` 同下标（落库定位键）
+    pub(super) db_ids: Rc<RefCell<Vec<i64>>>,
     /// 当前可见会话下标
     pub(super) current: Rc<Cell<usize>>,
     /// 思考模式开关（发送时读取；进行中的生成不受影响）
@@ -56,23 +65,72 @@ pub(super) struct Host {
 }
 
 impl Host {
-    /// 初始即带一个空的「新对话」会话。
-    pub(super) fn new() -> Self {
-        Self {
-            items: Rc::new(VecModel::from(vec![SessionItem {
-                title: NEW_TITLE.into(),
-                active: true,
-            }])),
-            models: Rc::new(RefCell::new(vec![Rc::new(
-                VecModel::<ChatMessage>::default(),
-            )])),
-            runs: Rc::new(RefCell::new(vec![RunState {
-                gen_id: 0,
-                cancel: None,
-            }])),
+    /// 从 DB 重建簿记（重启不丢）；无历史则建一个空「新对话」会话。
+    ///
+    /// 建会话行失败降级为占位 id `-1`（本会话内存照常、持久化报错仅记日志），
+    /// 侧栏永远至少有一个可选会话。
+    pub(super) fn new(db: Rc<Db>) -> Self {
+        let host = Self {
+            db,
+            items: Rc::new(VecModel::default()),
+            models: Rc::new(RefCell::new(Vec::new())),
+            runs: Rc::new(RefCell::new(Vec::new())),
+            db_ids: Rc::new(RefCell::new(Vec::new())),
             current: Rc::new(Cell::new(0)),
             thinking_on: Rc::new(Cell::new(true)),
+        };
+        let loaded = host.db.load_all().unwrap_or_else(|e| {
+            eprintln!("读取历史会话失败（本运行从空侧栏开始）: {e}");
+            Vec::new()
+        });
+        if loaded.is_empty() {
+            let id = host.create_session_row(NEW_TITLE);
+            host.adopt(id, NEW_TITLE, Vec::new());
+        } else {
+            for s in loaded {
+                let bubbles = s.messages.into_iter().map(bubble_from).collect();
+                host.adopt(s.id, &s.title, bubbles);
+            }
+            // 重启后默认可见 = 最近活动会话（load_all 按活跃升序，即末条）
+            let last = host.items.row_count() - 1;
+            if let Some(row) = host.items.row_data(last) {
+                host.items.set_row_data(
+                    last,
+                    SessionItem {
+                        active: true,
+                        ..row
+                    },
+                );
+            }
+            host.current.set(last);
         }
+        host
+    }
+
+    /// 插入新会话行；失败记日志并回 `-1` 占位。
+    fn create_session_row(&self, title: &str) -> i64 {
+        self.db.insert_session(title).unwrap_or_else(|e| {
+            eprintln!("创建会话失败（不持久）: {e}");
+            -1
+        })
+    }
+
+    /// 一条会话行并列进四个簿记列表；仅首条自动选中（重启可见性在 new 里另定）。
+    fn adopt(&self, db_id: i64, title: &str, bubbles: Vec<ChatMessage>) {
+        let active = self.db_ids.borrow().is_empty();
+        self.items.push(SessionItem {
+            title: title.into(),
+            active,
+        });
+        self.models
+            .borrow_mut()
+            .push(Rc::new(VecModel::from(bubbles)));
+        self.runs.borrow_mut().push(RunState {
+            gen_id: 0,
+            cancel: None,
+            model: String::new(),
+        });
+        self.db_ids.borrow_mut().push(db_id);
     }
 
     pub(super) fn active_model(&self) -> Rc<VecModel<ChatMessage>> {
@@ -84,7 +142,7 @@ impl Host {
         self.runs.borrow()[self.current.get()].cancel.is_some()
     }
 
-    /// 新建会话并切为可见；进行中的流式增量按 sid 仍写回原会话。
+    /// 新建会话（DB 先行，内存跟随）并切为可见；进行中的流式增量按 sid 仍写回原会话。
     pub(super) fn new_session(&self, window: &AppWindow) {
         let cur = self.current.get();
         if let Some(old) = self.items.row_data(cur) {
@@ -96,12 +154,15 @@ impl Host {
                 },
             );
         }
+        let db_id = self.create_session_row(NEW_TITLE);
         let model = Rc::new(VecModel::<ChatMessage>::default());
         self.models.borrow_mut().push(model.clone());
         self.runs.borrow_mut().push(RunState {
             gen_id: 0,
             cancel: None,
+            model: String::new(),
         });
+        self.db_ids.borrow_mut().push(db_id);
         self.items.push(SessionItem {
             title: NEW_TITLE.into(),
             active: true,
@@ -141,20 +202,83 @@ impl Host {
         window.set_generating(self.is_generating());
     }
 
-    /// 会话首次发送后，把占位标题换成输入摘要。
+    /// 会话首次发送后，把占位标题换成输入摘要（内存与 DB 同步）。
     pub(super) fn retitle_active(&self, text: &str) {
         let cur = self.current.get();
         if let Some(row) = self.items.row_data(cur)
             && row.title.as_str() == NEW_TITLE
         {
+            let title = derive_title(text);
             self.items.set_row_data(
                 cur,
                 SessionItem {
-                    title: derive_title(text),
+                    title: title.clone(),
                     ..row
                 },
             );
+            if let Some(&db_id) = self.db_ids.borrow().get(cur)
+                && let Err(e) = self.db.set_session_title(db_id, title.as_str())
+            {
+                eprintln!("会话标题落库失败: {e}");
+            }
         }
+    }
+
+    /// 用户消息发送即落库（每轮写库第 1 次；model/payload 对 user 无意义）。
+    pub(super) fn persist_user_message(&self, sid: usize, text: &str) {
+        if let Some(&db_id) = self.db_ids.borrow().get(sid)
+            && let Err(e) = self.db.insert_message(db_id, "user", text, "", None)
+        {
+            eprintln!("用户消息落库失败: {e}");
+        }
+    }
+
+    /// 轮次收尾（Done/Error，含停止）把尾部 assistant 气泡整条写成终稿
+    /// （每轮写库第 2 次；流式增量不逐 token 落库）。
+    pub(super) fn persist_turn(&self, sid: usize) {
+        let model = match self.models.borrow().get(sid) {
+            Some(m) => m.clone(),
+            None => return,
+        };
+        let Some(row) = model.row_data(model.row_count().saturating_sub(1)) else {
+            return;
+        };
+        if row.role != "assistant" {
+            return; // 空轮（无增量即收尾）：不写
+        }
+        let db_id = match self.db_ids.borrow().get(sid) {
+            Some(id) => *id,
+            None => return,
+        };
+        let model_id = match self.runs.borrow().get(sid) {
+            Some(run) => run.model.clone(),
+            None => String::new(),
+        };
+        let payload = MessagePayload {
+            thinking: row.thinking.to_string(),
+            tstate: row.tstate,
+            tauto: row.tauto,
+        };
+        if let Err(e) = self.db.insert_message(
+            db_id,
+            "assistant",
+            row.text.as_str(),
+            &model_id,
+            Some(&payload),
+        ) {
+            eprintln!("回复落库失败: {e}");
+        }
+    }
+}
+
+/// DB 消息行 → 启动回填的气泡（展示态原样恢复）。
+fn bubble_from(m: LoadedMessage) -> ChatMessage {
+    ChatMessage {
+        role: m.role.into(),
+        text: m.content.into(),
+        thinking: m.payload.thinking.into(),
+        tstate: m.payload.tstate,
+        tauto: m.payload.tauto,
     }
 }
 

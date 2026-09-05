@@ -13,6 +13,8 @@ serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml = "0.8"
+# 会话持久化：SQLite（bundled 自带引擎，同步 API 贴合主线程模型；选型讨论见 2026-09-05）
+rusqlite = { version = "0.40", features = ["bundled"] }
 slint = "1"
 # Slint 无剪贴板 API，复制按钮经系统剪贴板落地（Windows 原生实现）
 arboard = "3"

@@ -42,6 +42,7 @@ use crate::ai::{
     config::{Config, store_toml},
     provider::Provider,
 };
+use crate::db::Db;
 use slint::{SharedString, Timer, TimerMode, VecModel};
 
 use bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history};
@@ -215,7 +216,12 @@ fn save_settings(
 /// 这是 ui 模块唯一的公开接口，由 `main.rs` 转发调用。
 pub fn run() -> Result<(), slint::PlatformError> {
     let window = AppWindow::new()?;
-    let host = Host::new();
+    // 打开失败不致命：回落内存库（本运行可用、重启即灭），错误打日志
+    let db = Rc::new(Db::open("data/owakaka.db").unwrap_or_else(|e| {
+        eprintln!("打开 data/owakaka.db 失败，本运行不持久化: {e}");
+        Db::open_in_memory().expect("内存库也开不了就没法跑了")
+    }));
+    let host = Host::new(db.clone());
     window.set_sessions(host.items.clone().into());
     window.set_messages(host.active_model().into());
     window.set_thinking_on(host.thinking_on.get());
@@ -267,11 +273,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
             host.retitle_active(&text);
             current.push(ChatMessage {
                 role: "user".into(),
-                text: text.into(),
+                text: text.clone().into(),
                 thinking: SharedString::default(),
                 tstate: STATE_PARTIAL,
                 tauto: true,
             });
+            host.persist_user_message(sid, &text);
             let history = snapshot_history(&current);
 
             // 配置缺失/损坏只影响本轮发送，以内联气泡反馈，不退出也不卡 UI
@@ -282,16 +289,18 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     return;
                 }
             };
-            // 登记轮次（gen_id 递增）后投任务；回流事件打 (sid, gen_id) 标路由回原会话
+            // 登记轮次（gen_id 递增、记录本轮模型）后投任务；回流事件打 (sid, gen_id)
+            // 标路由回原会话
+            let active_model = models.active.borrow().clone();
             let gen_id = {
                 let mut runs = host.runs.borrow_mut();
                 let run = &mut runs[sid];
                 run.gen_id += 1;
+                run.model = active_model.clone();
                 run.gen_id
             };
             window_weak.upgrade().unwrap().set_generating(true);
             let run = RunRef { sid, gen_id };
-            let active_model = models.active.borrow().clone();
             let handle = client.spawn_turn(
                 &runtime,
                 history,
@@ -472,6 +481,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     TurnEvent::Done => {
                         fold_tail(&model); // 兜底：纯思考回复也要收起
                         timer_host.runs.borrow_mut()[run.sid].cancel = None;
+                        timer_host.persist_turn(run.sid);
                         if run.sid == timer_host.current.get() {
                             window.set_generating(false);
                         }
@@ -481,6 +491,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                         let brief: String = e.chars().take(300).collect();
                         append_part(&model, false, &format!("\n[出错] {brief}"));
                         timer_host.runs.borrow_mut()[run.sid].cancel = None;
+                        timer_host.persist_turn(run.sid);
                         if run.sid == timer_host.current.get() {
                             window.set_generating(false);
                         }
