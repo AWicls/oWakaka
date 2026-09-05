@@ -18,3 +18,6 @@ data/
 
 # codegraph 本地索引（衍生数据，不入库）
 .codegraph/
+
+# 本地 UI 目测截图（不入库）
+shot_*.png
