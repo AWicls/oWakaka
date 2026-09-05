@@ -169,10 +169,30 @@ export component SessionSidebar inherits Rectangle {
             }
         }
 
-        // —— 左下角按钮行：主题切换 + 程序内设置 ——
+        // —— 左下角按钮行：程序内设置 + 主题切换 + 回收站图标 ——
         bottom-row := HorizontalLayout {
             spacing: 4px;
             height: 34px;
+            Rectangle {
+                width: 40px;
+                height: 34px;
+                border-radius: 8px;
+                background: stb.has-hover ? Theme.p.listHover : transparent;
+                stb := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    mouse-cursor: pointer;
+                    clicked => { root.settings-clicked(); }
+                }
+                Icon {
+                    x: 12px;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    which: 5; // 设置滑杆
+                    ink: Theme.p.textSecondary;
+                }
+            }
             theme-btn := Rectangle {
                 width: 40px;
                 height: 34px;
@@ -194,29 +214,9 @@ export component SessionSidebar inherits Rectangle {
                     ink: Theme.p.textSecondary;
                 }
             }
+            // 回收站入口（垃圾桶图元；有删剩会话时右侧显计数并高亮）
             Rectangle {
-                width: 40px;
-                height: 34px;
-                border-radius: 8px;
-                background: stb.has-hover ? Theme.p.listHover : transparent;
-                stb := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    mouse-cursor: pointer;
-                    clicked => { root.settings-clicked(); }
-                }
-                Icon {
-                    x: 12px;
-                    y: (parent.height - self.height) / 2;
-                    width: 16px;
-                    height: 16px;
-                    which: 5; // 设置滑杆
-                    ink: Theme.p.textSecondary;
-                }
-            }
-            // 回收站入口（有删剩会话时显示计数并高亮）
-            Rectangle {
-                width: trash-lbl.preferred-width + 16px;
+                width: root.trash-count > 0 ? 54px : 40px;
                 height: 34px;
                 border-radius: 8px;
                 background: ttb.has-hover ? Theme.p.listHover
@@ -227,12 +227,20 @@ export component SessionSidebar inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => { root.trash-clicked(); }
                 }
-                trash-lbl := Text {
-                    x: 8px;
+                Icon {
+                    x: 12px;
                     y: (parent.height - self.height) / 2;
-                    text: root.trash-count > 0 ? "回收站 " + root.trash-count : "回收站";
-                    color: root.trash-count > 0 ? Theme.p.link : Theme.p.textMuted;
-                    font-size: 12px;
+                    width: 16px;
+                    height: 16px;
+                    which: 7; // 垃圾桶
+                    ink: root.trash-count > 0 ? Theme.p.link : Theme.p.textSecondary;
+                }
+                if root.trash-count > 0 : Text {
+                    x: 33px;
+                    y: (parent.height - self.height) / 2;
+                    text: "" + root.trash-count;
+                    color: Theme.p.link;
+                    font-size: 11px;
                 }
             }
             Rectangle { } // 左对齐，余量吃掉在右
