@@ -51,7 +51,7 @@ export global Theme {
     out property <ThemePalette> p: Theme.dark ? Theme.dark-p : Theme.light-p;
 }
 
-/// 通用图标（SVG path，viewBox 16×16）：0 太阳 | 1 月亮 | 2 显示器 | 3 对勾。
+/// 通用图标（SVG path，viewBox 16×16）：0 太阳 | 1 月亮 | 2 显示器 | 3 对勾 | 4 下拉箭头。
 /// 全部描边式（对勾/太阳/显示器），月亮为填充；单色随 color 参数主题化。
 export component Icon inherits Rectangle {
     in property <int> which;
@@ -115,5 +115,21 @@ export component Icon inherits Rectangle {
         stroke-line-join: round;
         fill: transparent;
         commands: "M3,8.6 L6.4,12 L13,4.6";
+    }
+    // 下拉箭头（描边 V 形）
+    Path {
+        visible: root.which == 4;
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.ink;
+        stroke-width: 1.6px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        fill: transparent;
+        commands: "M4,6.2 L8,10 L12,6.2";
     }
 }

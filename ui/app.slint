@@ -8,10 +8,10 @@ import { Theme } from "theme.slint";
 import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
-import { InputArea } from "input.slint";
+import { InputArea, ModelItem } from "input.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct
-export { ChatMessage, SessionItem }
+export { ChatMessage, SessionItem, ModelItem }
 
 export component AppWindow inherits Window {
     title: "oWakaka";
@@ -25,12 +25,16 @@ export component AppWindow inherits Window {
     in property <bool> generating; // 当前可见会话是否生成中
     in property <bool> thinking-on; // 思考模式开关（作用于之后的发送）
     in property <[SessionItem]> sessions;
+    in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
+    in property <string> model-label; // 当前激活模型显示名
     callback send(string);
     callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
     callback new-session();
     callback select-session(int);
     callback stop(); // 停止当前可见会话的生成
     callback toggle-thinking();
+    callback model-picked(string); // 选择模型（Rust 切换激活 + 回写 config.toml）
+    callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
 
     // 侧栏初始宽 190px（默认窗口 1120 的 ~17%）；不得引用 root.width，
     // 否则进入 layoutinfo 环。拖动 vsplit 改写 position 后此值即失效
@@ -114,9 +118,13 @@ export component AppWindow inherits Window {
                 height: hs.position;
                 generating: root.generating;
                 thinking-on: root.thinking-on;
+                models: root.models;
+                model-label: root.model-label;
                 send-submit(text) => { root.send(text); }
                 stop-request => { root.stop(); }
                 thinking-toggled => { root.toggle-thinking(); }
+                model-picked(id) => { root.model-picked(id); }
+                models-requested => { root.models-requested(); }
             }
         }
     }

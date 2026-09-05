@@ -30,12 +30,18 @@ mod bubbles;
 mod host;
 
 use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    rc::Rc,
     sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 
-use crate::ai::client::{Client, TurnEvent, TurnOptions};
-use slint::{SharedString, Timer, TimerMode};
+use crate::ai::{
+    client::{Client, TurnEvent, TurnOptions},
+    config::{Config, store_toml},
+};
+use slint::{SharedString, Timer, TimerMode, VecModel};
 
 use bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history};
 use host::{Host, RunRef, StreamMsg};
@@ -48,6 +54,122 @@ slint::include_modules!();
 /// `Client`，不再单独缓存。
 type ClientCache = Arc<Mutex<Option<Arc<Client>>>>;
 
+/// 后台回传主线程的消息（Timer 主线程排空）：对话轮事件与模型清单异步结果
+enum UiMsg {
+    Turn(StreamMsg),
+    Models(Result<Vec<String>, String>),
+}
+
+/// 模型切换下拉的 UI 状态：数据源、激活 ID、别名表（config `[models]`）；
+/// `fetched` 防抖——首次打开下拉才拉远端 `/models`，失败时下回打开可重试
+#[derive(Clone)]
+struct ModelsState {
+    items: Rc<VecModel<ModelItem>>,
+    active: Rc<RefCell<String>>,
+    aliases: Rc<RefCell<BTreeMap<String, String>>>,
+    fetched: Rc<Cell<bool>>,
+}
+
+impl ModelsState {
+    /// 初始值取自 config.toml（model + [models]）；读不到则空激活（发送回落客户端默认）
+    fn from_config() -> Self {
+        let (active, aliases) = match Config::load() {
+            Ok(cfg) => (cfg.model, cfg.models),
+            Err(_) => (String::new(), BTreeMap::new()),
+        };
+        let state = Self {
+            items: Rc::new(VecModel::default()),
+            active: Rc::new(RefCell::new(active)),
+            aliases: Rc::new(RefCell::new(aliases)),
+            fetched: Rc::new(Cell::new(false)),
+        };
+        state.rebuild(None);
+        state
+    }
+
+    /// 模型 ID 的显示名：config 别名优先，未配别名原样显示
+    fn display(&self, id: &str) -> SharedString {
+        self.aliases
+            .borrow()
+            .get(id)
+            .map_or_else(|| id.into(), |a| a.as_str().into())
+    }
+
+    /// 重建下拉清单：{激活} ∪ config 别名键 ∪ 远端结果，去重保序（激活恒首位）
+    fn rebuild(&self, remote: Option<&[String]>) {
+        let active = self.active.borrow().clone();
+        let mut ids: Vec<String> = Vec::new();
+        {
+            let mut push = |id: &str| {
+                if !id.is_empty() && !ids.iter().any(|x| x == id) {
+                    ids.push(id.to_string());
+                }
+            };
+            push(&active);
+            for id in self.aliases.borrow().keys() {
+                push(id);
+            }
+            if let Some(remote) = remote {
+                for id in remote {
+                    push(id);
+                }
+            }
+        }
+        let rows = ids
+            .into_iter()
+            .map(|id| ModelItem {
+                display: self.display(&id),
+                id: id.into(),
+                current: false,
+            })
+            .collect::<Vec<_>>();
+        let active_s: SharedString = active.into();
+        let rows: Vec<ModelItem> = rows
+            .into_iter()
+            .map(|mut m| {
+                m.current = m.id == active_s;
+                m
+            })
+            .collect();
+        self.items.set_vec(rows);
+    }
+
+    /// 把状态同步到窗口（下拉数据源 + 模型按钮文案）
+    fn apply(&self, window: &AppWindow) {
+        window.set_models(self.items.clone().into());
+        let active = self.active.borrow().clone();
+        let label = if active.is_empty() {
+            "未选模型".into()
+        } else {
+            self.display(&active)
+        };
+        window.set_model_label(label);
+    }
+
+    /// 切换激活模型：本会话即时生效（后续发送携带）并回写 config.toml，
+    /// 回写失败仅影响重启后持久，打日志不阻断
+    fn pick(&self, window: &AppWindow, id: String) {
+        if id.is_empty() || id == *self.active.borrow() {
+            return;
+        }
+        *self.active.borrow_mut() = id;
+        self.rebuild(None);
+        self.apply(window);
+        let active = self.active.borrow().clone();
+        if let Err(e) = persist_model(&active) {
+            eprintln!("模型回写 config.toml 失败（仅本次会话生效）: {e}");
+        }
+    }
+}
+
+/// 把激活模型写回 `config.toml` 的 `model` 字段，其余字段原样保留
+fn persist_model(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut cfg = Config::load()?;
+    cfg.model = id.to_string();
+    store_toml(&cfg, "config.toml")?;
+    Ok(())
+}
+
 /// UI 主入口：构建窗口、接线交互、运行 Slint 事件循环直到窗口关闭。
 ///
 /// 这是 ui 模块唯一的公开接口，由 `main.rs` 转发调用。
@@ -58,8 +180,11 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.set_messages(host.active_model().into());
     window.set_thinking_on(host.thinking_on.get());
 
+    let models = ModelsState::from_config();
+    models.apply(&window);
+
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("启动 tokio Runtime 失败"));
-    let (tx, rx) = mpsc::channel::<StreamMsg>();
+    let (tx, rx) = mpsc::channel::<UiMsg>();
     let cache: ClientCache = Arc::new(Mutex::new(None));
 
     // —— 会话栏：新建/切换只换"当前可见"模型与按钮态；流式增量按 sid 回原会话 ——
@@ -91,6 +216,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         let tx = tx.clone();
         let cache = cache.clone();
         let host = host.clone();
+        let models = models.clone();
         window.on_send(move |text| {
             let text: String = text.to_string();
             if text.trim().is_empty() {
@@ -125,18 +251,19 @@ pub fn run() -> Result<(), slint::PlatformError> {
             };
             window_weak.upgrade().unwrap().set_generating(true);
             let run = RunRef { sid, gen_id };
+            let active_model = models.active.borrow().clone();
             let handle = client.spawn_turn(
                 &runtime,
                 history,
                 TurnOptions {
                     thinking: host.thinking_on.get(),
-                    // S2 接入 UI 模型切换后传激活模型；当前恒用配置默认
-                    model: None,
+                    // 模型下拉的激活项；config 缺失时为空串→回落客户端默认模型
+                    model: Some(active_model),
                 },
                 {
                     let tx = tx.clone();
                     move |event| {
-                        let _ = tx.send(StreamMsg { run, event });
+                        let _ = tx.send(UiMsg::Turn(StreamMsg { run, event }));
                     }
                 },
             );
@@ -172,6 +299,39 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
     }
 
+    // —— 模型切换：选择即时生效并回写 config；打开下拉首次异步拉远端 /models ——
+    {
+        let window_weak = window.as_weak();
+        window.on_model_picked({
+            let models = models.clone();
+            move |id| {
+                if let Some(w) = window_weak.upgrade() {
+                    models.pick(&w, id.to_string());
+                }
+            }
+        });
+        window.on_models_requested({
+            let runtime = runtime.clone();
+            let cache = cache.clone();
+            let tx = tx.clone();
+            let models = models.clone();
+            move || {
+                if models.fetched.get() {
+                    return; // 已成功拉取过，不重复请求
+                }
+                let Ok(client) = ensure_client(&cache) else {
+                    return; // 配置缺失：下拉仍可用 config 清单，不打扰
+                };
+                models.fetched.set(true);
+                let tx = tx.clone();
+                runtime.spawn(async move {
+                    let result = client.list_models().await.map_err(|e| e.to_string());
+                    let _ = tx.send(UiMsg::Models(result));
+                });
+            }
+        });
+    }
+
     // —— 复制路径：Slint 无剪贴板 API，经 arboard 写系统剪贴板 ——
     window.on_copy(move |text| {
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
@@ -183,13 +343,27 @@ pub fn run() -> Result<(), slint::PlatformError> {
     {
         let window_weak = window.as_weak();
         let timer_host = host.clone();
+        let timer_models = models.clone();
         let timer = Timer::default();
         timer.start(TimerMode::Repeated, Duration::from_millis(30), move || {
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
             for msg in rx.try_iter() {
-                let StreamMsg { run, event } = msg;
+                let StreamMsg { run, event } = match msg {
+                    UiMsg::Turn(s) => s,
+                    UiMsg::Models(Ok(ids)) => {
+                        // 远端清单并入下拉（去重保序），失败重试留待下回打开
+                        timer_models.rebuild(Some(&ids));
+                        timer_models.apply(&window);
+                        continue;
+                    }
+                    UiMsg::Models(Err(e)) => {
+                        eprintln!("拉取远端模型清单失败: {e}");
+                        timer_models.fetched.set(false);
+                        continue;
+                    }
+                };
                 // 该会话已停止/重发（gen_id 前进过）：旧轮迟到事件一律丢弃
                 {
                     let runs = timer_host.runs.borrow();
