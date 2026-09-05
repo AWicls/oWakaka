@@ -324,9 +324,8 @@ component ModelCard inherits Rectangle {
         HorizontalLayout {
             height: 24px;
             spacing: 6px;
-            // 别名（有则常显，编辑态也不藏）
-            Text {
-                visible: root.mdl.alias != "";
+            // 别名（有则常显，编辑态也不藏）；if 块收起不占位不吃 spacing（visible 会）
+            if root.mdl.alias != "" : Text {
                 text: root.mdl.alias;
                 color: Theme.p.textPrimary;
                 font-size: 12px;
@@ -341,9 +340,8 @@ component ModelCard inherits Rectangle {
                 overflow: elide;
                 vertical-alignment: center;
             }
-            // 编辑态：别名输入框（自带边框，占剩余宽）
-            Rectangle {
-                visible: root.editing;
+            // 编辑态：别名输入框（自带边框，独占剩余宽；visible 门控会与 spacer 平分 stretch）
+            if root.editing : Rectangle {
                 horizontal-stretch: 1;
                 border-radius: 5px;
                 border-width: 1px;
@@ -373,7 +371,7 @@ component ModelCard inherits Rectangle {
                     font-size: 12px;
                 }
             }
-            Rectangle { visible: !root.editing; horizontal-stretch: 1; }
+            if !root.editing : Rectangle { horizontal-stretch: 1; }
             // 别名 ⇄ 完成：同一按钮原地切换文案/配色
             Pill {
                 width: 46px;
