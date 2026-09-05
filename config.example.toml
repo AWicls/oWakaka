@@ -1,10 +1,22 @@
 # 凭据模板：复制为 config.toml（正式代码用）或 config.test.toml（测试用），两者均已被 git 忽略
+
+# 提供商（可选，缺省 "custom"）：
+#   "custom"      = 通用 OpenAI 兼容网关：base_url 必填，api 接口族自由配
+#   "xiaomi_mimo" = 小米 MiMo 定制：base_url 缺省用官方端点，接口族锁死 responses
+# provider = "custom"
+
+# API 根地址（provider=custom 必填；xiaomi_mimo 显式写了则覆盖内置端点，如 token-plan 专属网关）
 base_url = "https://api.openai.com/v1"
 api_key = "sk-..."
+# 当前激活模型（UI 模型切换选中项，选择后回写至此）
 model = "gpt-4o-mini"
 
-# 对话接口族（两行均可整体省略，省略即默认值）：
-# "chat" = 兼容接口 /chat/completions（默认保底）；"responses" = OpenAI Responses API
+# 以下两行均可整体省略（省略即默认值）：
+# api = "chat" 仅 provider=custom 可自由配；缺省 "chat" 兼容接口保底，写 "responses" 启用新接口
 api = "chat"
-# 是否流式输出：true = 逐段增量（默认）；false = 整段一次性返回
+# stream = true 流式逐段增量（默认）；false 整段一次性返回
 stream = true
+
+# 模型别名表（可选）：键 = 模型 ID，值 = UI 显示名；切换下拉 = 此表 ∪ 远端 /models 清单
+[models]
+# "gpt-4o-mini" = "轻量主力"

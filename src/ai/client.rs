@@ -55,7 +55,7 @@ use std::time::Duration;
 
 use crate::ai::{
     config::{Api, Config},
-    dto::openai_chat::request::Request,
+    dto::{models::ModelList, openai_chat::request::Request},
 };
 
 /// 对话请求的失败类型：区分"传输层问题"、"服务端业务错误"与"响应形状不符"。
@@ -120,6 +120,10 @@ pub enum StreamEvent {
 
 /// OpenAI 兼容客户端，同一实例按配置在 chat 与 Responses 两个端点族间分发。
 ///
+/// 定制提供商（如 [`Provider::XiaomiMimo`](crate::ai::config::Provider::XiaomiMimo)）
+/// 不另建客户端：端点与接口族已在 [`Config`](crate::ai::config::Config) 解析出生效值，
+/// 线格式仍复用通用实现。
+///
 /// 无状态：可跨任务克隆共享的是内部 `reqwest::Client`（自带连接池），
 /// 因此同一 `Config` 建一个实例长期使用即可。
 pub struct Client {
@@ -137,12 +141,16 @@ pub struct Client {
 
 impl Client {
     /// 读默认凭据文件（`config.toml`）构建客户端：`Config::load` +
+    /// [`validate`](crate::ai::config::Config::validate) +
     /// [`from_config`](Self::from_config) 一步到位，错误原样上抛供调用方呈现。
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self::from_config(&Config::load()?))
+        let cfg = Config::load()?;
+        cfg.validate().map_err(Box::<dyn std::error::Error>::from)?;
+        Ok(Self::from_config(&cfg))
     }
 
-    /// 由配置构建客户端。`base_url` 末尾多余的 `/` 会被归一化。
+    /// 由配置构建客户端。端点/接口族取配置的**生效值**（定制提供商的内置默认在此解析）；
+    /// `base_url` 末尾多余的 `/` 会被归一化。完备性检查见 [`Config::validate`]。
     pub fn from_config(cfg: &Config) -> Self {
         Self {
             // 超时仅防挂死，builder 失败时退回默认客户端
@@ -150,10 +158,10 @@ impl Client {
                 .timeout(Duration::from_secs(60))
                 .build()
                 .unwrap_or_default(),
-            base_url: cfg.base_url.trim_end_matches('/').to_string(),
+            base_url: cfg.effective_base_url().trim_end_matches('/').to_string(),
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
-            api: cfg.api,
+            api: cfg.effective_api(),
             stream: cfg.stream,
         }
     }
@@ -172,5 +180,57 @@ impl Client {
             Api::Chat => self.generate_chat(req, on_event).await,
             Api::Responses => self.generate_responses(req, on_event).await,
         }
+    }
+
+    /// 拉取远端可用模型 ID 列表（`GET {base_url}/models`，OpenAI 兼容格式）。
+    ///
+    /// UI 模型切换下拉的数据源之一；网关不支持该端点时经 [`ChatError`] 上抛，
+    /// 由调用方降级为仅用配置清单。
+    pub async fn list_models(&self) -> Result<Vec<String>, ChatError> {
+        let resp = self
+            .http
+            .get(format!("{}/models", self.base_url))
+            .bearer_auth(&self.api_key)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+        if !status.is_success() {
+            return Err(ChatError::Api { status, body });
+        }
+        let list: ModelList = serde_json::from_str(&body).map_err(|e| ChatError::Decode {
+            error: e.to_string(),
+            body,
+        })?;
+        Ok(list.data.into_iter().map(|m| m.id).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::config::load_toml;
+
+    /// 定制提供商：配置缺省时解析出内置端点 + 锁定的 Responses 接口族
+    #[test]
+    fn from_config_resolves_mimo_defaults() {
+        let cfg: Config =
+            toml::from_str("provider=\"xiaomi_mimo\"\napi_key=\"k\"\nmodel=\"mimo-v2.5\"\n")
+                .unwrap();
+        let client = Client::from_config(&cfg);
+        assert_eq!(client.base_url, "https://api.xiaomimimo.com/v1");
+        assert_eq!(client.api, Api::Responses);
+    }
+
+    /// 真实请求测试：拉取模型清单，运行 `cargo test -- --ignored`
+    #[tokio::test]
+    #[ignore = "需要 config.test.toml 中的真实凭据"]
+    async fn list_models_roundtrip() {
+        let cfg = load_toml::<Config>("config.test.toml")
+            .expect("缺少 config.test.toml，请复制 config.example.toml 并填写");
+        let client = Client::from_config(&cfg);
+        let models = client.list_models().await.expect("models 请求失败");
+        assert!(!models.is_empty(), "模型清单为空");
+        println!("远端模型 {models:?}");
     }
 }

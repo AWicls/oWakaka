@@ -6,7 +6,10 @@
 //! use o_wakaka::ai::client::{TurnEvent, TurnOptions};
 //!
 //! // 仅演示类型形状；真实发起见 Client::spawn_turn
-//! let opts = TurnOptions { thinking: false };
+//! let opts = TurnOptions {
+//!     thinking: false,
+//!     model: None,
+//! };
 //! let ev = TurnEvent::Content("你好".into());
 //! matches!(ev, TurnEvent::Content(t) if t == "你好");
 //! ```
@@ -35,10 +38,12 @@ pub enum TurnEvent {
 }
 
 /// 一轮对话的语义参数：UI 侧开关进这里，线格式映射归 ai 层。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TurnOptions {
     /// 思考模式：开→不发字段跟随网关默认；关→按端点族发送关闭字段
     pub thinking: bool,
+    /// 本轮使用的模型；`None` 用客户端配置的默认模型。UI 切换模型后随发送传入
+    pub model: Option<String>,
 }
 
 /// 已投出对话轮次的控制柄：消费即请求停止本轮生成。
@@ -68,11 +73,7 @@ impl Client {
         mut on_event: impl FnMut(TurnEvent) + Send + Clone + 'static,
     ) -> TurnHandle {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
-        let req = Request {
-            model: self.model.clone(),
-            messages: history,
-            extra: thinking_extra(self.api, opts.thinking),
-        };
+        let req = build_request(&self.model, self.api, &opts, history);
         let client = self.clone();
         let mut deltas = on_event.clone();
         rt.spawn(async move {
@@ -92,6 +93,24 @@ impl Client {
             });
         });
         TurnHandle { cancel: cancel_tx }
+    }
+}
+
+/// 轮次请求组装：模型取 [`TurnOptions::model`]（非空覆盖）否则客户端配置的默认模型。
+fn build_request(
+    default_model: &str,
+    api: Api,
+    opts: &TurnOptions,
+    history: Vec<Message>,
+) -> Request {
+    Request {
+        model: opts
+            .model
+            .clone()
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| default_model.to_string()),
+        messages: history,
+        extra: thinking_extra(api, opts.thinking),
     }
 }
 
@@ -119,5 +138,33 @@ mod tests {
         assert!(thinking_extra(Api::Responses, true).is_none());
         let off = thinking_extra(Api::Responses, false).expect("关闭思考应有扩展字段");
         assert_eq!(off["reasoning"]["effort"], "none");
+    }
+
+    /// 模型覆盖：非空 opts.model 优先；None/空串回落配置默认
+    #[test]
+    fn build_request_model_override_falls_back() {
+        let base =
+            |opts: TurnOptions| build_request("cfg-model", Api::Responses, &opts, vec![]).model;
+        assert_eq!(
+            base(TurnOptions {
+                thinking: true,
+                model: None
+            }),
+            "cfg-model"
+        );
+        assert_eq!(
+            base(TurnOptions {
+                thinking: true,
+                model: Some("mimo-v2.5".into())
+            }),
+            "mimo-v2.5"
+        );
+        assert_eq!(
+            base(TurnOptions {
+                thinking: true,
+                model: Some(String::new())
+            }),
+            "cfg-model"
+        );
     }
 }

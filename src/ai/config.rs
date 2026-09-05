@@ -6,7 +6,7 @@
 //!
 //! 文档测试不依赖上述本地文件：用 [`load_toml`]/[`store_toml`] 在临时目录自造配置。
 
-use std::{error::Error, fs, path::Path};
+use std::{collections::BTreeMap, error::Error, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,7 @@ pub fn load_toml<T: serde::de::DeserializeOwned>(
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use std::collections::BTreeMap;
 /// use o_wakaka::ai::config::{Api, Config, load_toml, store_toml};
 ///
 /// let path = std::env::temp_dir().join("o_wakaka_cfg_doctest.toml");
@@ -30,8 +31,9 @@ pub fn load_toml<T: serde::de::DeserializeOwned>(
 ///     base_url: "https://api.openai.com/v1".into(),
 ///     api_key: "sk-test".into(),
 ///     model: "gpt-4o-mini".into(),
-///     api: Api::Responses,
-///     stream: true,
+///     api: Some(Api::Responses),
+///     models: BTreeMap::from([("gpt-4o-mini".to_string(), "主力模型".to_string())]),
+///     ..Config::default()
 /// };
 /// store_toml(&cfg, &path)?;
 /// let back: Config = load_toml(&path)?;
@@ -39,7 +41,8 @@ pub fn load_toml<T: serde::de::DeserializeOwned>(
 ///
 /// assert_eq!(back.base_url, cfg.base_url);
 /// assert_eq!(back.model, cfg.model);
-/// assert_eq!(back.api, Api::Responses);
+/// assert_eq!(back.api, Some(Api::Responses));
+/// assert_eq!(back.models["gpt-4o-mini"], "主力模型");
 /// // Debug 输出必须脱敏（防止日志泄漏密钥）
 /// assert!(!format!("{cfg:?}").contains(&cfg.api_key));
 /// # Ok(())
@@ -65,49 +68,104 @@ pub enum Api {
     Chat,
 }
 
+/// 提供商：通用兼容端点或厂家定制（新提供商加枚举变体 + 内置默认即可，不预建 trait）。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    /// 通用 OpenAI 兼容网关：`base_url` 必填，接口族自由配（缺省 chat）
+    #[default]
+    Custom,
+    /// 小米 MiMo 开放平台：内置官方端点，接口族锁死 Responses
+    XiaomiMimo,
+}
+
+impl Provider {
+    /// 内置默认根地址（`None` = 配置必填）
+    pub fn default_base_url(self) -> Option<&'static str> {
+        match self {
+            Provider::Custom => None,
+            Provider::XiaomiMimo => Some("https://api.xiaomimimo.com/v1"),
+        }
+    }
+}
+
 /// `stream` 字段缺省值：流式（serde 要求独立函数）。
 fn default_stream() -> bool {
     true
 }
 
-/// OpenAI 兼容端点配置。
+/// 运行配置（`config.toml` 顶级表）。
 ///
-/// `base_url` 可指向任何实现 `/chat/completions` 的网关。
-/// `api` 与 `stream` 均可缺省，老配置零改动仍然可用：
+/// `provider` 选通用兼容（custom，默认）或厂家定制；`base_url`/`api` 可缺省，
+/// 缺省按提供商内置默认解析（见 [`effective_base_url`](Self::effective_base_url)），
+/// 老配置零改动仍然可用。`models` 别名表与 `model` 激活项由 UI 读写回存：
 ///
 /// ```
-/// use o_wakaka::ai::config::{Api, Config};
+/// use o_wakaka::ai::config::{Api, Config, Provider};
 ///
+/// // custom（默认）：base_url 必填，api 缺省 = chat 保底，stream 缺省 = true
 /// let cfg: Config =
 ///     toml::from_str("base_url=\"u\"\napi_key=\"k\"\nmodel=\"m\"\n").unwrap();
-/// assert_eq!(cfg.api, Api::Chat); // 缺省走兼容接口
-/// assert!(cfg.stream); // 缺省流式
+/// assert_eq!(cfg.provider, Provider::Custom);
+/// assert_eq!(cfg.effective_api(), Api::Chat);
+/// assert!(cfg.stream);
+/// assert!(cfg.validate().is_ok());
+///
+/// // xiaomi_mimo：端点缺省 = 官方内置、接口族锁 responses；显式写 base_url 可覆盖为专属网关
+/// let mimo: Config = toml::from_str(
+///     "provider=\"xiaomi_mimo\"\napi_key=\"k\"\nmodel=\"mimo-v2.5\"\n",
+/// )
+/// .unwrap();
+/// assert_eq!(mimo.effective_base_url(), "https://api.xiaomimimo.com/v1");
+/// assert_eq!(mimo.effective_api(), Api::Responses);
+/// let bad: Config = toml::from_str(
+///     "provider=\"xiaomi_mimo\"\napi_key=\"k\"\nmodel=\"m\"\napi=\"chat\"\n",
+/// )
+/// .unwrap();
+/// assert!(bad.validate().is_err()); // 定制提供商接口族锁死
+///
+/// // [models] 别名表：键 = 模型 ID，值 = UI 显示名
+/// let aliased: Config = toml::from_str(
+///     "base_url=\"u\"\napi_key=\"k\"\nmodel=\"m\"\n[models]\nm = \"主力模型\"\n",
+/// )
+/// .unwrap();
+/// assert_eq!(aliased.models["m"], "主力模型");
 /// ```
 #[derive(Serialize, Deserialize, Default)]
 pub struct Config {
-    /// API 根地址，如 `https://api.openai.com/v1`（末尾斜杠可选，客户端会归一化）
+    /// 提供商：`"custom"`（默认）| `"xiaomi_mimo"`（小米 MiMo，端点内置、接口族锁死）
+    #[serde(default)]
+    pub provider: Provider,
+    /// API 根地址，如 `https://api.openai.com/v1`（末尾斜杠可选，客户端会归一化）。
+    /// custom 必填；定制提供商缺省用内置端点，显式写了以显式为准
+    #[serde(default)]
     pub base_url: String,
     /// Bearer 鉴权密钥，仅存在于本地配置文件，不进代码库
     pub api_key: String,
-    /// 默认模型名，随请求体 `model` 字段发送
+    /// 当前激活模型名，随请求体 `model` 字段发送；UI 切换后回写此字段
     pub model: String,
-    /// 对话接口族，缺省 `chat`，手动配 `responses` 启用新接口
+    /// 对话接口族（仅 custom 可自由配）：缺省 `chat`，手动写 `"responses"` 启用新接口
     #[serde(default)]
-    pub api: Api,
+    pub api: Option<Api>,
     /// 是否流式输出，缺省 `true`；`false` 时整段一次性返回
     #[serde(default = "default_stream")]
     pub stream: bool,
+    /// 可用模型别名表（可选）：模型 ID → UI 显示名；未列的 ID 原样显示
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models: BTreeMap<String, String>,
 }
 
 /// 手动实现：`api_key` 恒为脱敏占位，防止 `{:?}`/日志/panic 输出泄漏密钥。
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
+            .field("provider", &self.provider)
             .field("base_url", &self.base_url)
             .field("api_key", &"[REDACTED]")
             .field("model", &self.model)
             .field("api", &self.api)
             .field("stream", &self.stream)
+            .field("models", &self.models)
             .finish()
     }
 }
@@ -118,5 +176,33 @@ impl Config {
     /// 需真实凭据的测试请改用 [`load_toml`] 读取 `config.test.toml`。
     pub fn load() -> Result<Self, Box<dyn Error>> {
         load_toml("config.toml")
+    }
+
+    /// 生效根地址：显式写的 `base_url` 优先，其次提供商内置默认；空 = 未配置。
+    pub fn effective_base_url(&self) -> &str {
+        if self.base_url.is_empty() {
+            self.provider.default_base_url().unwrap_or("")
+        } else {
+            &self.base_url
+        }
+    }
+
+    /// 生效接口族：定制提供商锁死（[`Provider::XiaomiMimo`] = Responses）；custom 缺省 Chat。
+    pub fn effective_api(&self) -> Api {
+        match self.provider {
+            Provider::Custom => self.api.unwrap_or_default(),
+            Provider::XiaomiMimo => Api::Responses,
+        }
+    }
+
+    /// 配置完备性检查，`Err` 携带可直接展示的文案（[`Client::load`](super::client::Client::load) 建客户端前调用）。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.effective_base_url().is_empty() {
+            return Err("缺少 base_url：provider = \"custom\" 时必须显式配置".into());
+        }
+        if matches!(self.provider, Provider::XiaomiMimo) && matches!(self.api, Some(Api::Chat)) {
+            return Err("小米 MiMo 锁死 responses 接口族，api 不能配 \"chat\"".into());
+        }
+        Ok(())
     }
 }

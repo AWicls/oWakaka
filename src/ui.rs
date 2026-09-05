@@ -130,6 +130,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 history,
                 TurnOptions {
                     thinking: host.thinking_on.get(),
+                    // S2 接入 UI 模型切换后传激活模型；当前恒用配置默认
+                    model: None,
                 },
                 {
                     let tx = tx.clone();

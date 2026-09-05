@@ -8,6 +8,12 @@
 ## [Unreleased]
 
 ### Added
+- 定制提供商与配置规范化（顶级 `provider` 字段，缺省 `"custom"`）：
+  - `provider = "xiaomi_mimo"`（小米 MiMo）：内置官方端点 `https://api.xiaomimimo.com/v1`（显式 `base_url` 可覆盖为专属网关），接口族锁死 Responses（显式配 chat 校验报错）；线格式复用通用 responses 实现，不另建客户端
+  - `model` 字段语义升级为"当前激活模型"；新增 `[models]` 别名表（模型 ID → UI 显示名）可读写回存；老配置零改动照常可用
+  - `Client::list_models()`：`GET /models`（OpenAI 兼容格式）拉取远端可用模型清单，UI 模型切换（下一步）数据源
+  - `TurnOptions.model`：轮次请求级模型覆盖（None/空回落配置默认）；`Client::load()` 建客户端前先过 `Config::validate()` 完备性检查
+  - 测试：配置解析/校验/别名读写 doctest、MiMo 端点解析与请求模型覆盖单测各 1；真实网关测试 `list_models_roundtrip`（`#[ignore]`）
 - OpenAI Responses API（`/responses`）接入：
   - 线格式 DTO（`dto/openai_response/`）：请求 `input` 消息项、非流式 `output` 条目（`Response::assistant_text()`/`reasoning_text()` 提取正文与思考摘要）、流式语义事件（`Event`），`extra` 平铺透传扩展字段
   - `Client::respond()`（非流式）与 `Client::respond_stream()`（流式）：语义事件按 `type` 分发，回答 `response.output_text.delta`、思考 `response.reasoning_summary_text.delta`（兼容 `reasoning_text.delta`）；`response.completed`/`[DONE]`/EOF 终止，`error`/`response.failed` 报新错误变体 `ChatError::Stream`
