@@ -197,7 +197,7 @@ export component InputArea inherits Rectangle {
             th-lbl := Text {
                 x: 10px;
                 y: (parent.height - self.height) / 2;
-                text: !root.thinking-capable ? "Thinking ✕"
+                text: !root.thinking-capable ? "Thinking ×"
                     : (root.thinking-on ? "● Thinking" : "○ Thinking");
                 color: root.thinking-on && root.thinking-capable
                     ? Theme.p.link : Theme.p.textSecondary;

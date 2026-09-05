@@ -47,15 +47,19 @@ component SessionRow inherits Rectangle {
             font-size: 13px;
             overflow: elide;
         }
-        Text {
+        // 删除叉号图元自绘（✕ 字形在默认字体缺字，渲染成豆腐块）
+        Path {
             visible: ta.has-hover;
-            width: 20px;
+            width: 10px;
+            height: 10px;
+            x: parent.width - 21px;
             y: (parent.height - self.height) / 2;
-            x: parent.width - 26px;
-            text: "✕";
-            color: Theme.p.textMuted;
-            font-size: 12px;
-            horizontal-alignment: center;
+            viewbox-width: 10;
+            viewbox-height: 10;
+            stroke: Theme.p.textMuted;
+            stroke-width: 1.2px;
+            fill: transparent;
+            commands: "M1,1 L9,9 M9,1 L1,9";
         }
     }
 }
