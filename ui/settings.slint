@@ -832,8 +832,7 @@ export component SettingsPage inherits Rectangle {
                                             }
                                         }
                                     }
-                                    Text {
-                                        visible: root.prov-status != "";
+                                    if root.prov-status != "" : Text {
                                         text: root.prov-status;
                                         color: Theme.p.link;
                                         font-size: 12px;
@@ -842,8 +841,7 @@ export component SettingsPage inherits Rectangle {
                                 }
 
                                 // 已删条目专属反馈行（模型框内状态随块隐藏，这里补位）
-                                if root.sel-deleted : Text {
-                                    visible: root.prov-status != "";
+                                if root.sel-deleted && root.prov-status != "" : Text {
                                     text: root.prov-status;
                                     color: Theme.p.link;
                                     font-size: 12px;
@@ -853,10 +851,9 @@ export component SettingsPage inherits Rectangle {
                         }
 
                         // 按钮行（固定底栏，不随主体滚动）：删除类恒左，动效项右（「完成」最右）
-                        HorizontalLayout {
+                        if root.prov-sel != "" : HorizontalLayout {
                             spacing: 8px;
                             height: 30px;
-                            visible: root.prov-sel != "";
                             Pill {
                                 width: 72px;
                                 label: root.sel-deleted ? "彻底删除" : "删除";
@@ -977,8 +974,8 @@ export component SettingsPage inherits Rectangle {
             }
         }
 
-        Text {
-            visible: root.status != "" && root.page != 1;
+        // visible 只免渲染不免布局占位（1.17 编译器实证）→ 条件子项必须用 if 块才真正让出空间
+        if root.status != "" && root.page != 1 : Text {
             text: root.status;
             color: Theme.p.link;
             font-size: 12px;
@@ -986,10 +983,9 @@ export component SettingsPage inherits Rectangle {
         }
 
         // 全局「保存」只服务 persona 两页；提供商页在详情卡内即时保存
-        HorizontalLayout {
+        if root.page == 2 || root.page == 3 : HorizontalLayout {
             spacing: 8px;
             height: 30px;
-            visible: root.page == 2 || root.page == 3;
             Rectangle { horizontal-stretch: 1; }
             Pill {
                 width: 88px;
