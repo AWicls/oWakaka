@@ -324,18 +324,17 @@ component ModelCard inherits Rectangle {
         HorizontalLayout {
             height: 24px;
             spacing: 6px;
-            // 别名（主展示，仅当有别名时替换 ID 样式）
+            // 别名（有则常显，编辑态也不藏）
             Text {
-                visible: !root.editing && root.mdl.alias != "";
+                visible: root.mdl.alias != "";
                 text: root.mdl.alias;
                 color: Theme.p.textPrimary;
                 font-size: 12px;
                 overflow: elide;
                 vertical-alignment: center;
             }
-            // 请求 ID：灰色，恒显（编辑态也不藏），无别名时升为主色
+            // 请求 ID：恒显（编辑态也不藏），无别名时升为主色
             Text {
-                visible: !root.editing;
                 text: root.mdl.id;
                 color: root.mdl.alias != "" ? Theme.p.textMuted : Theme.p.textPrimary;
                 font-size: 12px;
@@ -374,7 +373,7 @@ component ModelCard inherits Rectangle {
                     font-size: 12px;
                 }
             }
-            Rectangle { horizontal-stretch: 1; }
+            Rectangle { visible: !root.editing; horizontal-stretch: 1; }
             // 别名 ⇄ 完成：同一按钮原地切换文案/配色
             Pill {
                 width: 46px;
@@ -454,6 +453,7 @@ export component SettingsPage inherits Rectangle {
     callback prov-model-added(string);
     callback prov-model-custom(string, string);
     callback prov-model-alias(string, string);
+    callback prov-model-commit(string); // 「完成」收起后统一回刷标签/下拉
     callback prov-model-cap(string, int, bool);
     callback prov-model-removed(string);
     callback prov-created(int);            // 新增菜单选择：0 通用兼容 | 1 小米 MiMo
@@ -721,7 +721,10 @@ export component SettingsPage inherits Rectangle {
                                             mdl: m;
                                             editing: root.mdl-edit != "" && root.mdl-edit == m.id;
                                             edit-requested => { root.mdl-edit = m.id; }
-                                            edit-done => { root.mdl-edit = ""; }
+                                            edit-done => {
+                                                root.mdl-edit = "";
+                                                root.prov-model-commit(m.id);
+                                            }
                                             alias-changed(a) => { root.prov-model-alias(m.id, a); }
                                             cap(which, on) => { root.prov-model-cap(m.id, which, on); }
                                             remove-request => { root.prov-model-removed(m.id); }
@@ -835,7 +838,6 @@ export component SettingsPage inherits Rectangle {
                                 wrap: word-wrap;
                             }
                         }
-                        Rectangle { vertical-stretch: 1; }
 
                         // 已删条目专属反馈行（模型框内状态随块隐藏，这里补位）
                         if root.sel-deleted : Text {

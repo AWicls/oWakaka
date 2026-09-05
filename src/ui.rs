@@ -319,9 +319,17 @@ fn remote_mark_added(window: &AppWindow, model_id: &str, added: bool) {
     window.set_remote_models(Rc::new(VecModel::from(rows)).into());
 }
 
-/// 行级模型改写的统一入口：读当前选中提供商 → 取/建该 model → 应用 f → upsert → 回刷。
+/// 行级模型改写的统一入口：读当前选中提供商 → 取/建该 model → 应用 f → upsert。
 /// 提供商被删/不可用则写 prov-status 并静默返回。
-fn model_upsert(db: &Db, window: &AppWindow, model_id: &str, f: impl FnOnce(&mut ModelInfo)) {
+/// `quiet` = 只落库不回刷 Slint 列表——逐字符的文本输入专用：
+/// 回刷会重建 for-delegate，正在敲字的 TextInput 随销毁丢焦点、布局抖动。
+fn model_upsert(
+    db: &Db,
+    window: &AppWindow,
+    model_id: &str,
+    quiet: bool,
+    f: impl FnOnce(&mut ModelInfo),
+) {
     let sel = window.get_prov_sel().to_string();
     let ps = match Providers::load(db) {
         Ok(ps) => ps,
@@ -348,9 +356,11 @@ fn model_upsert(db: &Db, window: &AppWindow, model_id: &str, f: impl FnOnce(&mut
         window.set_prov_status(format!("模型保存失败: {e}").into());
         return;
     }
-    let ps = Providers::load(db).unwrap_or_default();
-    prov_models_refresh(&ps, window);
-    remote_mark_added(window, model_id, true);
+    if !quiet {
+        let ps = Providers::load(db).unwrap_or_default();
+        prov_models_refresh(&ps, window);
+        remote_mark_added(window, model_id, true);
+    }
 }
 
 /// 「完成」：表单写回对应条目（kind/锁定族不信任 UI 传入）；密钥框非空才更新 `[keys]`。
@@ -935,7 +945,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                model_upsert(&db, &w, &mid, |_| {});
+                model_upsert(&db, &w, &mid, false, |_| {});
             }
         });
         window.on_prov_model_custom({
@@ -951,7 +961,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     return;
                 }
                 let alias = alias.trim().to_string();
-                model_upsert(&db, &w, &mid, |m| m.alias = alias);
+                model_upsert(&db, &w, &mid, false, |m| m.alias = alias);
             }
         });
         window.on_prov_model_alias({
@@ -961,8 +971,23 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                let alias = alias.trim().to_string();
-                model_upsert(&db, &w, &mid, |m| m.alias = alias);
+                // 逐字符静默落库：不重建列表 = 保住 TextInput 焦点
+                let alias = alias.trim_start().to_string();
+                model_upsert(&db, &w, &mid, true, |m| m.alias = alias);
+            }
+        });
+        window.on_prov_model_commit({
+            let window_weak = window.as_weak();
+            let db = db.clone();
+            move |_mid| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                // 「完成」收起后统一回刷：名称行标签与模型下拉同步最新别名
+                match Providers::load(&db) {
+                    Ok(ps) => prov_models_refresh(&ps, &w),
+                    Err(e) => w.set_prov_status(format!("回刷失败: {e}").into()),
+                }
             }
         });
         window.on_prov_model_cap({
@@ -972,7 +997,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                model_upsert(&db, &w, &mid, |m| match cap {
+                model_upsert(&db, &w, &mid, false, |m| match cap {
                     0 => m.thinking = on,
                     1 => m.vision = on,
                     2 => m.audio = on,

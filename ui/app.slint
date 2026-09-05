@@ -93,6 +93,7 @@ export component AppWindow inherits Window {
     callback prov-model-added(string);     // 从远端 ＋ 添加
     callback prov-model-custom(string, string); // 自定义 id + 别名
     callback prov-model-alias(string, string);  // 改别名
+    callback prov-model-commit(string); // 别名编辑「完成」→ 回刷列表/下拉
     callback prov-model-cap(string, int, bool); // 改能力位（0思考1视觉2语音3视频4工具）
     callback prov-model-removed(string);   // 移除模型
     callback prov-created(int);
@@ -331,6 +332,7 @@ export component AppWindow inherits Window {
         prov-model-added(id) => { root.prov-model-added(id); }
         prov-model-custom(id, alias) => { root.prov-model-custom(id, alias); }
         prov-model-alias(id, alias) => { root.prov-model-alias(id, alias); }
+        prov-model-commit(id) => { root.prov-model-commit(id); }
         prov-model-cap(id, cap, on) => { root.prov-model-cap(id, cap, on); }
         prov-model-removed(id) => { root.prov-model-removed(id); }
         prov-created(k) => { root.prov-created(k); }
