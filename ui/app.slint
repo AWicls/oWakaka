@@ -358,8 +358,12 @@ export component AppWindow inherits Window {
                 border-color: Theme.p.panelBorder;
                 clip: true;
 
-                // 当前会话助手：圆形头像（有图盖图，无图色板圆底+首字）+ 名称
+                // 当前会话助手：圆形头像（有图盖图，无图色板圆底+首字）+ 名称。
+                // layout 在非布局父级里定高会被求解器垂直居中 → 显式钉到顶部
                 HorizontalLayout {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
                     height: 44px;
                     padding-left: 14px;
                     padding-right: 14px;

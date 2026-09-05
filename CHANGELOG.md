@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Fixed
+- 聊天卡助手头栏垂直居中悬在卡片正中：非布局父级（Rectangle）里的 Layout 定高会被 Slint 求解器垂直居中而非贴顶（实测），头栏 HorizontalLayout 显式钉 `x:0; y:0; width:parent.width` 即回顶部
 - 提供商编辑卡纵向自适应终形态（三轮返修归并）：模型框改**弹性区**——`min-height` 两行（128px）、`vertical-stretch:1` 吃满窗口富余高，框内嵌 ScrollView 自滚（viewport-height 按行数绑定、viewport-width 钉死防内容偏右）。空间足够时表单元素恒全显、**只有模型框滚动**；窗口压到内容最小高以下外层 ScrollView 才可滚（固定底栏不随滚）。尾部 filler 仅模型区隐藏时（无选中/已删条目）出现，防定高子项摊开。根因二则：**Rectangle 的 preferred 高度不从子级 layout 反推**（仅 min-height 的框在 viewport 计算里恒 90px，多出的行被 clip 裁掉且无法滚动）；**裸 Rectangle/嵌套 Layout 默认 stretch=1**（高窗富余高被其吃掉，内容摊开下沉、按钮行贴卡片底）
 - 状态文案「✓/✕」豆腐块修复（U+2713/U+2715 默认字体缺字渲染成「口」）：测试连通/拉取失败回显去掉字形改纯文字（`连通：N 个模型，X ms`、`连接失败：…`、`拉取失败：…`）
 - 设置页「大下巴」补根因：**Slint `visible: false` 只免渲染、不免布局占位**（编译器把 visible 降级成 Clip 元素，布局求解全程不看它——1.17.1 源码实证），提供商页下恒隐藏的状态行与「保存」行仍吃掉 ~54px，把卡片顶得够不到底（聊天页内容块全显式定位故无恙）。设置页链路 5 处条件子项改 `if` 条件块（收起即真不占位）：外层状态行/保存行、详情卡底栏按钮行、模型区状态行、已删条目状态行。同病横修：模型行名称行 3 处 `visible` 门控改 `if`（别名 Text 隐藏时不再吃 6px spacing；编辑态输入框此前与隐藏 spacer 平分 stretch、只拿一半剩余宽，现独占）
