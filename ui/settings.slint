@@ -27,10 +27,13 @@ component FieldRow inherits Rectangle {
             background: Theme.p.windowBg;
             ti := TextInput {
                 x: 8px;
-                y: (parent.height - self.height) / 2;
+                y: 0;
                 width: parent.width - 16px;
-                font-size: 13px;
+                height: parent.height;
+                // 官方垂直居中：占满行高后按行盒居中，placeholder 与输入文本同一基准
+                vertical-alignment: center;
                 single-line: true;
+                font-size: 13px;
                 color: Theme.p.textPrimary;
                 selection-background-color: Theme.p.accentSoftBg;
                 text <=> root.text;
@@ -213,7 +216,6 @@ component NavItem inherits Rectangle {
 component BackButton inherits Rectangle {
     callback clicked();
 
-    width: 88px;
     height: 34px;
     border-radius: 8px;
     border-width: 1px;
@@ -302,32 +304,49 @@ component CapChip inherits Rectangle {
     }
 }
 
-/// 模型管理卡中的一行：别名输入 + 能力胶囊 + id 展示 + 移除
+/// 模型管理行：默认单行显示（别名或请求ID + 能力摘要），点「编辑」展开
+/// 别名输入与能力勾选；「−」移除。编辑态由外层 mdl-edit 驱动（同屏仅一行）
 component ModelCard inherits Rectangle {
     in property <ModelRow> mdl;
+    in property <bool> editing;
     callback alias-changed(string);
     callback cap(int, bool);
     callback remove-request();
+    callback edit-requested();
+    callback edit-done();
 
-    height: 60px;
+    height: root.editing ? 62px : 30px;
     border-radius: 6px;
-    background: transparent;
+    background: root.editing ? Theme.p.windowBg : transparent;
     VerticalLayout {
         padding: 3px;
-        spacing: 3px;
+        spacing: 2px;
         HorizontalLayout {
             height: 24px;
             spacing: 6px;
+            // —— 查看态标题 / 编辑态别名输入 ——
+            Text {
+                visible: !root.editing;
+                horizontal-stretch: 1;
+                text: root.mdl.alias != "" ? root.mdl.alias : root.mdl.id;
+                color: Theme.p.textPrimary;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
             Rectangle {
+                visible: root.editing;
                 horizontal-stretch: 1;
                 border-radius: 5px;
                 border-width: 1px;
                 border-color: Theme.p.inputBorder;
-                background: Theme.p.windowBg;
+                background: Theme.p.panelBg;
                 ti := TextInput {
                     x: 6px;
-                    y: (parent.height - self.height) / 2;
+                    y: 0;
                     width: parent.width - 12px;
+                    height: parent.height;
+                    vertical-alignment: center;
                     single-line: true;
                     font-size: 12px;
                     color: Theme.p.textPrimary;
@@ -338,19 +357,54 @@ component ModelCard inherits Rectangle {
                 Text {
                     visible: ti.text == "";
                     x: 6px;
-                    y: (parent.height - self.height) / 2;
-                    text: "显示别名（留空 = 原样显示 ID）";
+                    y: 0;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: "显示别名（默认 = 请求ID）";
                     color: Theme.p.textMuted;
                     font-size: 12px;
                 }
             }
+            Text {
+                visible: !root.editing && root.mdl.alias != "";
+                text: root.mdl.id;
+                color: Theme.p.textMuted;
+                font-size: 11px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            Text {
+                visible: !root.editing;
+                text: (root.mdl.thinking ? "思考 " : "")
+                    + (root.mdl.vision ? "图片 " : "")
+                    + (root.mdl.audio ? "语音 " : "")
+                    + (root.mdl.video ? "视频 " : "")
+                    + (root.mdl.tools ? "工具" : "");
+                color: Theme.p.link;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Pill {
+                visible: !root.editing;
+                width: 46px;
+                label: "编辑";
+                picked => { root.edit-requested(); }
+            }
+            Pill {
+                visible: root.editing;
+                width: 46px;
+                label: "完成";
+                primary: true;
+                picked => { root.edit-done(); }
+            }
             Pill {
                 width: 30px;
-                label: "✕";
+                label: "−";
                 picked => { root.remove-request(); }
             }
         }
         HorizontalLayout {
+            visible: root.editing;
             height: 22px;
             spacing: 4px;
             CapChip {
@@ -379,13 +433,6 @@ component ModelCard inherits Rectangle {
                 toggled => { root.cap(4, !root.mdl.tools); }
             }
             Rectangle { horizontal-stretch: 1; }
-            Text {
-                text: root.mdl.id;
-                color: Theme.p.textMuted;
-                font-size: 11px;
-                overflow: elide;
-                vertical-alignment: center;
-            }
         }
     }
 }
@@ -439,6 +486,8 @@ export component SettingsPage inherits Rectangle {
     property <int> page: 1;
     property <bool> add-menu: false;        // 新增提供商弹层
     property <bool> remote-open: false;     // 远端模型清单弹层（拉取按钮开启，遮罩关闭）
+    property <bool> custom-open: false;     // 自定义模型输入行（「自定义」按钮开合）
+    property <string> mdl-edit: "";         // 正在编辑的模型行 id（同屏仅一行）
 
     // 编辑态（persona 字段跨页存续）：初值 = 注入的落盘配置
     in-out property <string> ed-system: root.init-system-prompt;
@@ -452,29 +501,13 @@ export component SettingsPage inherits Rectangle {
         padding: 14px;
         spacing: 12px;
 
-        // —— 顶栏：返回 + 页题 ——
-        HorizontalLayout {
-            height: 34px;
-            spacing: 10px;
-            BackButton {
-                clicked => { root.back(); }
-            }
-            Text {
-                text: "设置";
-                color: Theme.p.textPrimary;
-                font-size: 16px;
-                vertical-alignment: center;
-            }
-            Rectangle { horizontal-stretch: 1; }
-        }
-
         HorizontalLayout {
             spacing: 10px;
             vertical-stretch: 1;
 
-            // —— 左：分类导航卡（与对话面板同款圆角描边）——
+            // —— 左：分类导航卡（返回置顶；宽度随窗口收放） ——
             Rectangle {
-                width: 148px;
+                width: Math.max(104px, Math.min(150px, root.width * 0.14));
                 background: Theme.p.panelBg;
                 border-radius: 14px;
                 border-width: 1px;
@@ -482,6 +515,14 @@ export component SettingsPage inherits Rectangle {
                 VerticalLayout {
                     padding: 8px;
                     spacing: 4px;
+                    BackButton {
+                        clicked => { root.back(); }
+                    }
+                    Text {
+                        text: "设置";
+                        color: Theme.p.textPrimary;
+                        font-size: 15px;
+                    }
                     NavItem {
                         label: "界面";
                         selected: root.page == 0;
@@ -510,8 +551,8 @@ export component SettingsPage inherits Rectangle {
             if root.page == 1 : HorizontalLayout {
                 spacing: 10px;
 
-                Rectangle {
-                    width: 160px;
+                prov-list := Rectangle {
+                    width: Math.max(120px, Math.min(180px, root.width * 0.17));
                     background: Theme.p.panelBg;
                     border-radius: 14px;
                     border-width: 1px;
@@ -529,9 +570,42 @@ export component SettingsPage inherits Rectangle {
                             active: pr.active;
                             deleted: pr.deleted;
                             current: pr.id == root.prov-sel;
-                            clicked => { root.prov-selected(pr.id); }
+                            clicked => {
+                                root.prov-selected(pr.id);
+                                root.mdl-edit = "";
+                                root.custom-open = false;
+                            }
                         }
                         Rectangle { vertical-stretch: 1; }
+                    }
+                    // 新增弹层：卡内锚「＋ 新增」正下方（后于布局声明 = 盖在上层）
+                    if root.add-menu : Rectangle {
+                        x: 6px;
+                        y: 42px;
+                        width: parent.width - 12px;
+                        height: 76px;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.p.inputBorder;
+                        background: Theme.p.panelBg;
+                        VerticalLayout {
+                            padding: 6px;
+                            spacing: 0;
+                            MenuOpt {
+                                label: "自定义";
+                                picked => {
+                                    root.add-menu = false;
+                                    root.prov-created(0);
+                                }
+                            }
+                            MenuOpt {
+                                label: "Xiaomi MiMo";
+                                picked => {
+                                    root.add-menu = false;
+                                    root.prov-created(1);
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -609,61 +683,25 @@ export component SettingsPage inherits Rectangle {
                             font-size: 13px;
                         }
 
-                        // —— Step B：模型管理 ——
+                        // —— Step B/C：模型管理（框 stretch 吃剩余高，按钮行在框下） ——
                         if root.prov-sel != "" && !root.sel-deleted : VerticalLayout {
                             spacing: 6px;
-                            height: 250px;
+                            vertical-stretch: 1;
                             Text {
-                                text: "可用模型（拉远端 / 自定义；勾选能力，Step C 起生效）";
+                                text: "可用模型";
                                 color: Theme.p.textMuted;
                                 font-size: 12px;
                             }
-                            HorizontalLayout {
-                                spacing: 6px;
-                                height: 26px;
-                                custom-id := TextInput {
-                                    width: 160px;
-                                    height: 26px;
-                                    font-size: 12px;
-                                    single-line: true;
-                                    color: Theme.p.textPrimary;
-                                    horizontal-stretch: 1;
-                                }
-                                custom-alias := TextInput {
-                                    width: 110px;
-                                    height: 26px;
-                                    font-size: 12px;
-                                    single-line: true;
-                                    color: Theme.p.textPrimary;
-                                }
-                                Pill {
-                                    width: 56px;
-                                    label: "自定义+";
-                                    picked => {
-                                        root.prov-model-custom(custom-id.text, custom-alias.text);
-                                        custom-id.text = "";
-                                        custom-alias.text = "";
-                                    }
-                                }
-                                Pill {
-                                    width: 84px;
-                                    label: "拉取远端";
-                                    selected: root.remote-loading;
-                                    picked => {
-                                        root.remote-open = true;
-                                        root.prov-fetch();
-                                    }
-                                }
-                            }
                             Rectangle {
                                 vertical-stretch: 1;
+                                min-height: 90px;
                                 border-radius: 8px;
                                 border-width: 1px;
                                 border-color: Theme.p.inputBorder;
                                 background: Theme.p.windowBg;
                                 clip: true;
                                 if root.prov-models.length == 0 : Text {
-                                    text: "还没有模型，用上方输入或「拉取远端」添加。";
+                                    text: "还没有模型：右下「拉取远端」或「自定义」添加。";
                                     color: Theme.p.textMuted;
                                     font-size: 12px;
                                     x: 8px;
@@ -681,6 +719,9 @@ export component SettingsPage inherits Rectangle {
                                         spacing: 2px;
                                         for m in root.prov-models : ModelCard {
                                             mdl: m;
+                                            editing: root.mdl-edit != "" && root.mdl-edit == m.id;
+                                            edit-requested => { root.mdl-edit = m.id; }
+                                            edit-done => { root.mdl-edit = ""; }
                                             alias-changed(a) => { root.prov-model-alias(m.id, a); }
                                             cap(which, on) => { root.prov-model-cap(m.id, which, on); }
                                             remove-request => { root.prov-model-removed(m.id); }
@@ -688,14 +729,70 @@ export component SettingsPage inherits Rectangle {
                                     }
                                 }
                             }
-                        }
-
-                        Text {
-                            visible: root.prov-status != "";
-                            text: root.prov-status;
-                            color: Theme.p.link;
-                            font-size: 12px;
-                            wrap: word-wrap;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                height: 30px;
+                                Pill {
+                                    width: 88px;
+                                    label: "测试连通";
+                                    picked => { root.prov-tested(); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                Pill {
+                                    width: 72px;
+                                    label: "自定义";
+                                    selected: root.custom-open;
+                                    picked => { root.custom-open = !root.custom-open; }
+                                }
+                                Pill {
+                                    width: 84px;
+                                    label: "拉取远端";
+                                    selected: root.remote-loading;
+                                    picked => {
+                                        root.remote-open = true;
+                                        root.prov-fetch();
+                                    }
+                                }
+                            }
+                            // 自定义输入行（「自定义」按钮开合；新建即一条普通模型，与拉取殊途同归）
+                            if root.custom-open : HorizontalLayout {
+                                spacing: 6px;
+                                height: 26px;
+                                custom-id := TextInput {
+                                    height: 26px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    font-size: 12px;
+                                    color: Theme.p.textPrimary;
+                                }
+                                custom-alias := TextInput {
+                                    width: Math.max(90px, root.width * 0.1);
+                                    height: 26px;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    font-size: 12px;
+                                    color: Theme.p.textPrimary;
+                                }
+                                Pill {
+                                    width: 48px;
+                                    label: "添加";
+                                    primary: true;
+                                    picked => {
+                                        root.prov-model-custom(custom-id.text, custom-alias.text);
+                                        custom-id.text = "";
+                                        custom-alias.text = "";
+                                        root.custom-open = false;
+                                    }
+                                }
+                            }
+                            Text {
+                                visible: root.prov-status != "";
+                                text: root.prov-status;
+                                color: Theme.p.link;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
                         }
                         Rectangle { vertical-stretch: 1; }
 
@@ -703,18 +800,27 @@ export component SettingsPage inherits Rectangle {
                             spacing: 8px;
                             height: 30px;
                             visible: root.prov-sel != "";
-                            Pill {
-                                width: 88px;
-                                label: "测试连通";
-                                picked => { root.prov-tested(); }
+                            Text {
+                                visible: root.sel-deleted && root.prov-status != "";
+                                text: root.prov-status;
+                                color: Theme.p.link;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                visible: root.sel-deleted && root.prov-status == "";
+                                text: " ";
+                                horizontal-stretch: 1;
                             }
                             Pill {
                                 width: 72px;
                                 label: "完成";
                                 primary: true;
+                                visible: !root.sel-deleted;
                                 picked => { root.prov-saved(); }
                             }
-                            Rectangle { horizontal-stretch: 1; }
+                            if !root.sel-deleted : Rectangle { horizontal-stretch: 1; }
                             if !root.sel-deleted : Pill {
                                 width: 72px;
                                 label: "删除";
@@ -852,46 +958,7 @@ export component SettingsPage inherits Rectangle {
         }
     }
 
-    // —— 新增提供商：遮罩 + 弹层（锚列表卡「＋ 新增」下方，坐标按固定布局推算） ——
-    if root.add-menu : Rectangle {
-        x: 0;
-        y: 0;
-        width: root.width;
-        height: root.height;
-        TouchArea {
-            clicked => { root.add-menu = false; }
-        }
-    }
-    if root.add-menu : Rectangle {
-        x: 14px + 148px + 10px + 8px;
-        y: 14px + 34px + 12px + 8px + 30px + 4px;
-        width: 168px;
-        height: 76px;
-        border-radius: 10px;
-        border-width: 1px;
-        border-color: Theme.p.inputBorder;
-        background: Theme.p.panelBg;
-        VerticalLayout {
-            padding: 6px;
-            spacing: 0;
-            MenuOpt {
-                label: "自定义";
-                picked => {
-                    root.add-menu = false;
-                    root.prov-created(0);
-                }
-            }
-            MenuOpt {
-                label: "Xiaomi MiMo";
-                picked => {
-                    root.add-menu = false;
-                    root.prov-created(1);
-                }
-            }
-        }
-    }
-
-    // —— 远端模型清单弹层：＋收录；已收录 ✓ 灰显（遮罩关闭） ——
+    // —— 远端模型清单弹层：居中自适应（＋收录；已收录 ✓ 灰显，遮罩关闭） ——
     if root.remote-open : Rectangle {
         x: 0;
         y: 0;
@@ -902,10 +969,10 @@ export component SettingsPage inherits Rectangle {
         }
     }
     if root.remote-open : Rectangle {
-        x: Math.min(root.width - 340px, 14px + 148px + 10px + 160px + 10px + 24px);
-        y: 120px;
-        width: 320px;
-        height: 400px;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: Math.min(360px, root.width - 60px);
+        height: Math.min(440px, root.height - 60px);
         border-radius: 10px;
         border-width: 1px;
         border-color: Theme.p.inputBorder;

@@ -241,7 +241,7 @@ export component AppWindow inherits Window {
     if root.trash-open : Rectangle {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
-        width: 400px;
+        width: Math.min(400px, root.width - 60px);
         height: Math.min(420px, root.height - 40px);
         border-radius: 14px;
         border-width: 1px;
