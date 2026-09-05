@@ -708,9 +708,10 @@ export component SettingsPage inherits Rectangle {
                                         color: Theme.p.textMuted;
                                         font-size: 12px;
                                     }
+                                    // 框高显式随行数算（Rectangle preferred 不从子 layout 反推，
+                                    // 定高才能传导进外层 viewport 恢复滚动）：58 行高 + 2 间距
                                     Rectangle {
-                                        min-height: 90px;
-                                        vertical-stretch: 0;
+                                        height: Math.max(90px, root.prov-models.length * 60px + 8px);
                                         border-radius: 8px;
                                         border-width: 1px;
                                         border-color: Theme.p.inputBorder;
