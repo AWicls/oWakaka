@@ -2,7 +2,7 @@
 // 助手气泡含思考过程三态展示（收起/部分/全开）。
 // 当前为硬编码深色配色，浅色/深色自适应后续增量处理。
 
-import { Button, ScrollView, TextEdit } from "std-widgets.slint";
+import { Button, ScrollView } from "std-widgets.slint";
 
 /// 一条聊天消息（气泡数据源）
 export struct ChatMessage {
@@ -305,36 +305,74 @@ component HSplitter inherits Rectangle {
     }
 }
 
-/// 输入区卡片：总高由外层拖拽条（HSplitter.position）控制；
-/// 编辑器吃满剩余高度，内容超出时编辑器内部滚动。
+/// 输入区卡片：总高由外层拖拽条（HSplitter.position）控制。
+/// 编辑器为自绘无框区（std ScrollView + 原生 TextInput）：fluent 内置 TextEdit 的
+/// 白底+边框写死在样式内部不可覆盖（widgets/fluent/textedit.slint 实证），故绕开。
+/// 编辑区与按钮行之间只隔一段透明间距，不再有任何边框线。
 component InputArea inherits Rectangle {
-    in property <bool> busy;
+    in property <bool> generating; // 当前会话是否正在生成（决定发送键=停止键）
+    in property <bool> thinking-on;
     callback send-submit(string);
+    callback stop-request();
+    callback thinking-toggled();
 
     background: #1e2026;
     border-radius: 14px;
     border-width: 1px;
     border-color: #ffffff14;
 
-    ed := TextEdit {
+    ed-area := ScrollView {
         x: 12px;
         y: 10px;
         width: parent.width - 24px;
-        // 54 = 上 10 + 间距 6 + 按钮行 28 + 下 10；下限 24px 防拖到最小时塌陷
-        height: Math.max(24px, root.height - 54px);
-        font-size: 14px;
-        placeholder-text: "输入消息，Ctrl+Enter 发送（Enter 换行）";
-        enabled: !root.busy;
-        // 先于编辑器处理按键：Ctrl+Enter 发送并吞掉；普通 Enter 放行 → 换行
-        key-pressed(ev) => {
-            if (ev.text == "\n" && ev.modifiers.control) {
-                if (!root.busy && self.text != "") {
-                    root.send-submit(self.text);
-                    self.text = "";
+        // 10 上 + 编辑区 + 12 透明分隔 + 28 按钮行 + 10 下；下限防塌陷
+        height: Math.max(24px, root.height - 10px - 12px - 28px - 10px);
+        viewport-width: self.visible-width;
+        viewport-height: Math.max(self.visible-height, ti.preferred-height);
+
+        // 裸编辑面：零装饰，背景即卡片色；光标跟随滚动逻辑与官方 TextEditBase 同款
+        ti := TextInput {
+            single-line: false;
+            wrap: word-wrap;
+            font-size: 14px;
+            color: #f3f4f6;
+            page-height: ed-area.visible-height;
+            // 先于内置编辑处理按键：Ctrl+Enter 发送并吞掉；普通 Enter 放行 → 换行。
+            // 生成中/空文本也吞掉组合键，避免插入多余换行
+            key-pressed(ev) => {
+                if (ev.text == "\n" && ev.modifiers.control) {
+                    if (!root.generating && self.text != "") {
+                        root.send-submit(self.text);
+                        self.text = "";
+                    }
+                    accept;
+                } else {
+                    reject;
                 }
-                accept;
             }
-            reject;
+            cursor-position-changed(cpos) => {
+                if (cpos.y + ed-area.viewport-y < 0px) {
+                    ed-area.viewport-y = Math.min(0px,
+                        Math.max(ed-area.visible-height - self.height, -cpos.y));
+                } else if (cpos.y + ed-area.viewport-y > ed-area.visible-height - 20px) {
+                    ed-area.viewport-y = Math.min(0px,
+                        Math.max(ed-area.visible-height - self.height,
+                            ed-area.visible-height - cpos.y - 20px));
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        x: ed-area.x;
+        y: ed-area.y;
+        width: ed-area.width;
+        height: 20px;
+        Text {
+            text: ti.text == "" ? "输入消息，Ctrl+Enter 发送（Enter 换行）" : "";
+            color: #6b7280;
+            font-size: 14px;
+            vertical-alignment: top;
         }
     }
 
@@ -344,16 +382,44 @@ component InputArea inherits Rectangle {
         width: parent.width - 24px;
         // 显式高度：游离 layout 默认高度=parent.height，会构成绑定环
         height: 28px;
-        // 左侧弹性占位，按钮贴右下
+        spacing: 8px;
+
+        // Thinking 开关：默认开；开启态蓝色强调
+        Rectangle {
+            width: th-lbl.preferred-width + 20px;
+            height: 28px;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: root.thinking-on ? #2f6fed66 : #ffffff26;
+            background: root.thinking-on ? #2f6fed26 : (th-ta.has-hover ? #ffffff1a : #ffffff0d);
+            th-ta := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                mouse-cursor: pointer;
+                clicked => { root.thinking-toggled(); }
+            }
+            th-lbl := Text {
+                x: 10px;
+                y: (parent.height - self.height) / 2;
+                text: root.thinking-on ? "● Thinking" : "○ Thinking";
+                color: root.thinking-on ? #9db9ff : #8f96a3;
+                font-size: 13px;
+            }
+        }
+        // 弹性占位，发送/停止按钮贴右下
         Rectangle { }
         Button {
             width: 132px;
             height: 28px;
-            text: root.busy ? "生成中…" : "发送 (Ctrl+Enter)";
-            enabled: !root.busy && ed.text != "";
+            text: root.generating ? "■ 停止" : "发送 (Ctrl+Enter)";
+            enabled: root.generating || ti.text != "";
             clicked => {
-                root.send-submit(ed.text);
-                ed.text = "";
+                if (root.generating) {
+                    root.stop-request();
+                } else {
+                    root.send-submit(ti.text);
+                    ti.text = "";
+                }
             }
         }
     }
@@ -368,12 +434,15 @@ export component AppWindow inherits Window {
     min-height: 460px;
 
     in property <[ChatMessage]> messages;
-    in property <bool> busy;
+    in property <bool> generating; // 当前可见会话是否生成中
+    in property <bool> thinking-on; // 思考模式开关（作用于之后的发送）
     in property <[SessionItem]> sessions;
     callback send(string);
     callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
     callback new-session();
     callback select-session(int);
+    callback stop(); // 停止当前可见会话的生成
+    callback toggle-thinking();
 
     // 侧栏初始宽 190px（默认窗口 1120 的 ~17%）；不得引用 root.width，
     // 否则进入 layoutinfo 环。拖动 vsplit 改写 position 后此值即失效
@@ -412,6 +481,11 @@ export component AppWindow inherits Window {
                     y: 8px;
                     width: parent.width - 16px;
                     height: parent.height - 16px;
+                    // 视口宽钉死为可见宽：否则长消息把视口撑宽，气泡整体偏右、贴不出边距
+                    viewport-width: self.visible-width;
+                    horizontal-scrollbar-policy: always-off;
+                    // as-needed 的滚动条仅悬停时显形，深色底上近乎不可见 → 常显
+                    vertical-scrollbar-policy: always-on;
                     // 粘底状态机：viewport-y 为负值语义（0=顶部，height-viewport-height=底部）。
                     // scrolled() 仅在用户滚动时触发：滚离底部即脱离粘底，滚回底部自动恢复；
                     // 内容变化时仅当粘底才贴底。
@@ -450,8 +524,11 @@ export component AppWindow inherits Window {
             }
             InputArea {
                 height: hs.position;
-                busy: root.busy;
+                generating: root.generating;
+                thinking-on: root.thinking-on;
                 send-submit(text) => { root.send(text); }
+                stop-request => { root.stop(); }
+                thinking-toggled => { root.toggle-thinking(); }
             }
         }
     }
