@@ -68,26 +68,8 @@ pub enum Api {
     Chat,
 }
 
-/// 提供商：通用兼容端点或厂家定制（新提供商加枚举变体 + 内置默认即可，不预建 trait）。
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Provider {
-    /// 通用 OpenAI 兼容网关：`base_url` 必填，接口族自由配（缺省 chat）
-    #[default]
-    Custom,
-    /// 小米 MiMo 开放平台：内置官方端点，接口族锁死 Responses
-    XiaomiMimo,
-}
-
-impl Provider {
-    /// 内置默认根地址（`None` = 配置必填）
-    pub fn default_base_url(self) -> Option<&'static str> {
-        match self {
-            Provider::Custom => None,
-            Provider::XiaomiMimo => Some("https://api.xiaomimimo.com/v1"),
-        }
-    }
-}
+/// 提供商：通用兼容端点或厂家定制。定义与各家事实已独立至 [`crate::ai::provider`]。
+pub use crate::ai::provider::Provider;
 
 /// `stream` 字段缺省值：流式（serde 要求独立函数）。
 fn default_stream() -> bool {
@@ -187,12 +169,12 @@ impl Config {
         }
     }
 
-    /// 生效接口族：定制提供商锁死（[`Provider::XiaomiMimo`] = Responses）；custom 缺省 Chat。
+    /// 生效接口族：定制提供商锁死（[`Provider::locked_api`]）；custom 缺省 Chat。
     pub fn effective_api(&self) -> Api {
-        match self.provider {
-            Provider::Custom => self.api.unwrap_or_default(),
-            Provider::XiaomiMimo => Api::Responses,
+        if let Some(locked) = self.provider.locked_api() {
+            return locked;
         }
+        self.api.unwrap_or_default()
     }
 
     /// 配置完备性检查，`Err` 携带可直接展示的文案（[`Client::load`](super::client::Client::load) 建客户端前调用）。
@@ -200,9 +182,24 @@ impl Config {
         if self.effective_base_url().is_empty() {
             return Err("缺少 base_url：provider = \"custom\" 时必须显式配置".into());
         }
-        if matches!(self.provider, Provider::XiaomiMimo) && matches!(self.api, Some(Api::Chat)) {
-            return Err("小米 MiMo 锁死 responses 接口族，api 不能配 \"chat\"".into());
+        if let Some(locked) = self.provider.locked_api()
+            && let Some(api) = self.api
+            && api != locked
+        {
+            return Err(format!(
+                "定制提供商接口族锁死 {}, api 不能配 \"{}\"",
+                api_name(locked),
+                api_name(api)
+            ));
         }
         Ok(())
+    }
+}
+
+/// TOML 接口族名（与 [`Api`] 的 serde 改名保持一致），仅用于校验报错文案。
+fn api_name(api: Api) -> &'static str {
+    match api {
+        Api::Chat => "chat",
+        Api::Responses => "responses",
     }
 }

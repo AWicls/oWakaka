@@ -120,7 +120,7 @@ pub enum StreamEvent {
 
 /// OpenAI 兼容客户端，同一实例按配置在 chat 与 Responses 两个端点族间分发。
 ///
-/// 定制提供商（如 [`Provider::XiaomiMimo`](crate::ai::config::Provider::XiaomiMimo)）
+/// 定制提供商（如 [`Provider::XiaomiMimo`](crate::ai::provider::Provider::XiaomiMimo)）
 /// 不另建客户端：端点与接口族已在 [`Config`](crate::ai::config::Config) 解析出生效值，
 /// 线格式仍复用通用实现。
 ///
