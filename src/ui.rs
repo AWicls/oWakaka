@@ -39,7 +39,7 @@ use std::{
 
 use crate::ai::{
     client::{Client, TurnEvent, TurnOptions},
-    config::{Config, store_toml},
+    config::Config,
     provider::Provider,
 };
 use crate::db::Db;
@@ -66,6 +66,7 @@ enum UiMsg {
 /// `fetched` 防抖——首次打开下拉才拉远端 `/models`，失败时下回打开可重试
 #[derive(Clone)]
 struct ModelsState {
+    db: Rc<Db>,
     items: Rc<VecModel<ModelItem>>,
     active: Rc<RefCell<String>>,
     aliases: Rc<RefCell<BTreeMap<String, String>>>,
@@ -73,13 +74,14 @@ struct ModelsState {
 }
 
 impl ModelsState {
-    /// 初始值取自 config.toml（model + [models]）；读不到则空激活（发送回落客户端默认）
-    fn from_config() -> Self {
-        let (active, aliases) = match Config::load() {
+    /// 初始值取自运行配置（model + [models]）；读不到则空激活（发送回落客户端默认）
+    fn from_config(db: Rc<Db>) -> Self {
+        let (active, aliases) = match Config::load(&db) {
             Ok(cfg) => (cfg.model, cfg.models),
             Err(_) => (String::new(), BTreeMap::new()),
         };
         let state = Self {
+            db,
             items: Rc::new(VecModel::default()),
             active: Rc::new(RefCell::new(active)),
             aliases: Rc::new(RefCell::new(aliases)),
@@ -148,7 +150,7 @@ impl ModelsState {
         window.set_model_label(label);
     }
 
-    /// 切换激活模型：本会话即时生效（后续发送携带）并回写 config.toml，
+    /// 切换激活模型：本会话即时生效（后续发送携带）并回写设置（DB kv），
     /// 回写失败仅影响重启后持久，打日志不阻断
     fn pick(&self, window: &AppWindow, id: String) {
         if id.is_empty() || id == *self.active.borrow() {
@@ -158,34 +160,36 @@ impl ModelsState {
         self.rebuild(None);
         self.apply(window);
         let active = self.active.borrow().clone();
-        if let Err(e) = persist_model(&active) {
-            eprintln!("模型回写 config.toml 失败（仅本次会话生效）: {e}");
+        if let Err(e) = self.persist_model(&active) {
+            eprintln!("模型回写设置失败（仅本次会话生效）: {e}");
         }
     }
-}
 
-/// 把激活模型写回 `config.toml` 的 `model` 字段，其余字段原样保留
-fn persist_model(id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = Config::load()?;
-    cfg.model = id.to_string();
-    store_toml(&cfg, "config.toml")?;
-    Ok(())
+    /// 把激活模型写回设置（kv 配置 JSON）的 `model` 字段，其余字段原样保留
+    fn persist_model(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let mut cfg = Config::load(&self.db)?;
+        cfg.model = id.to_string();
+        cfg.save(&self.db)
+    }
 }
 
 /// 设置弹窗保存：只更新暴露字段（stream/api/[models] 等原样保留），
 /// 校验不过不落盘；成功则失效客户端缓存并同步模型下拉（允许重拉远端清单）
+// 参数 = Slint saved(p,url,key,model) 回调直传 + 4 个共享状态，拆包反而绕
+#[allow(clippy::too_many_arguments)]
 fn save_settings(
     p: i32,
     url: &str,
     key: &str,
     model: &str,
+    db: &Db,
     cache: &ClientCache,
     models: &ModelsState,
     window: &AppWindow,
 ) -> SharedString {
-    let mut cfg = match Config::load() {
+    let mut cfg = match Config::load(db) {
         Ok(cfg) => cfg,
-        Err(e) => return format!("读取 config.toml 失败: {e}").into(),
+        Err(e) => return format!("读取配置失败: {e}").into(),
     };
     cfg.provider = if p == 1 {
         Provider::XiaomiMimo
@@ -200,7 +204,7 @@ fn save_settings(
     if let Err(e) = cfg.validate() {
         return e.into();
     }
-    if let Err(e) = store_toml(&cfg, "config.toml") {
+    if let Err(e) = cfg.save(db) {
         return format!("保存失败: {e}").into();
     }
     *cache.lock().unwrap() = None; // 下一次发送按新配置重建客户端
@@ -226,7 +230,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.set_messages(host.active_model().into());
     window.set_thinking_on(host.thinking_on.get());
 
-    let models = ModelsState::from_config();
+    let models = ModelsState::from_config(db.clone());
     models.apply(&window);
 
     let runtime = Arc::new(tokio::runtime::Runtime::new().expect("启动 tokio Runtime 失败"));
@@ -263,6 +267,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         let cache = cache.clone();
         let host = host.clone();
         let models = models.clone();
+        let db = db.clone();
         window.on_send(move |text| {
             let text: String = text.to_string();
             if text.trim().is_empty() {
@@ -282,7 +287,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let history = snapshot_history(&current);
 
             // 配置缺失/损坏只影响本轮发送，以内联气泡反馈，不退出也不卡 UI
-            let client = match ensure_client(&cache) {
+            let client = match ensure_client(&cache, &db) {
                 Ok(c) => c,
                 Err(msg) => {
                     append_part(&current, false, &format!("[配置错误] {msg}"));
@@ -364,11 +369,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let cache = cache.clone();
             let tx = tx.clone();
             let models = models.clone();
+            let db = db.clone();
             move || {
                 if models.fetched.get() {
                     return; // 已成功拉取过，不重复请求
                 }
-                let Ok(client) = ensure_client(&cache) else {
+                let Ok(client) = ensure_client(&cache, &db) else {
                     return; // 配置缺失：下拉仍可用 config 清单，不打扰
                 };
                 models.fetched.set(true);
@@ -386,12 +392,13 @@ pub fn run() -> Result<(), slint::PlatformError> {
         window.on_settings_requested({
             let window_weak = window.as_weak();
             let cache = cache.clone();
+            let db = db.clone();
             move || {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
                 // 读不到配置也照常开弹窗（字段空白），保存时报错引导
-                if let Ok(cfg) = Config::load() {
+                if let Ok(cfg) = Config::load(&db) {
                     w.set_cfg_provider(if cfg.provider == Provider::XiaomiMimo {
                         1
                     } else {
@@ -419,11 +426,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let window_weak = window.as_weak();
             let cache = cache.clone();
             let models = models.clone();
+            let db = db.clone();
             move |p, url, key, model| {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                let status = save_settings(p, &url, &key, &model, &cache, &models, &w);
+                let status = save_settings(p, &url, &key, &model, &db, &cache, &models, &w);
                 w.set_cfg_status(status.clone());
                 if status.starts_with("已保存") {
                     w.set_settings_open(false);
@@ -510,10 +518,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
 
 /// 取（必要时懒建）客户端；`Err` 携带可直接展示的文案。
 /// 请求组装/取消编排已下沉至 [`Client::spawn_turn`](crate::ai::client::Client::spawn_turn)。
-fn ensure_client(cache: &ClientCache) -> Result<Arc<Client>, String> {
+fn ensure_client(cache: &ClientCache, db: &Db) -> Result<Arc<Client>, String> {
     let mut guard = cache.lock().unwrap();
     if guard.is_none() {
-        let client = Client::load().map_err(|e| format!("读取 config.toml 失败: {e}"))?;
+        let client = Client::load(db).map_err(|e| format!("读取配置失败: {e}"))?;
         *guard = Some(Arc::new(client));
     }
     Ok(guard.as_ref().unwrap().clone())

@@ -8,6 +8,12 @@
 ## [Unreleased]
 
 ### Added
+- 配置存储入 DB（DB-2，`config.toml` 瘦身为仅密钥）：
+  - 新增 `kv` 表（JSON 值 CHECK 把关）；运行配置（provider/base_url/model/api/stream/[models] 别名）整体作设置 JSON 存 `kv("config")`，**密钥序列化即丢、永不进 DB**（`Config.api_key` skip_serializing + `Secrets` 独立结构，均 Debug 恒脱敏）
+  - 读取两路组装（`Config::load(db)`）：设置取 DB、密钥取 `config.toml`；DB 无配置时回落老式全量 toml——**首次保存设置/切换模型自动完成拆分迁移**，老配置零改动照常可用；此后 `config.toml` 只剩 `api_key` 一行
+  - 影响路径同步改造：`Client::load(db)`、设置弹窗保存、模型切换回写、下拉初始值；模板 `config.example.toml` 重写（test.toml 保持全量格式，`#[ignore]` 真实测试不碰 DB）
+  - `SCHEMA_VERSION` 1→2：按开发期重建策略，**既有测试会话数据清库一次**
+  - 测试：kv 存取自成一体/非法 JSON 拒绝、两路组装与拆分迁移往返、`Secrets` 容缺省/脱敏 doctest 3 + store_toml 密钥不落盘断言收紧
 - SQLite 会话持久化（DB-1，`data/owakaka.db`，rusqlite bundled）：
   - 新模块 `db`：混合式表（查询字段成列 + `payload` JSON 叶子），session/message 两表；`persona_id`、`origin` 预埋列；时间戳 SQLite 生成 RFC3339 UTC；`user_version` 不匹配即整库重建（开发期策略，无 backfill）
   - 落库时机：发送即写 user 消息、轮次收尾（Done/Error/停止）写 assistant 终稿一条（流式增量不落库）；会话标题首答后同步；重启后侧栏与气泡（含思考折叠态）按原样恢复，默认可见 = 最近活动会话

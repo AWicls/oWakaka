@@ -58,6 +58,7 @@ use crate::ai::{
     dto::{models::ModelList, openai_chat::request::Request},
     provider::Customization,
 };
+use crate::db::Db;
 
 /// 对话请求的失败类型：区分"传输层问题"、"服务端业务错误"与"响应形状不符"。
 #[derive(Debug)]
@@ -158,11 +159,11 @@ impl Client {
         }
     }
 
-    /// 读默认凭据文件（`config.toml`）构建客户端：`Config::load` +
+    /// 读运行配置（DB 设置 + `config.toml` 密钥，见 [`Config::load`]）构建客户端：
     /// [`validate`](crate::ai::config::Config::validate) +
     /// [`from_config`](Self::from_config) 一步到位，错误原样上抛供调用方呈现。
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        let cfg = Config::load()?;
+    pub fn load(db: &Db) -> Result<Self, Box<dyn std::error::Error>> {
+        let cfg = Config::load(db)?;
         cfg.validate().map_err(Box::<dyn std::error::Error>::from)?;
         Ok(Self::from_config(&cfg))
     }

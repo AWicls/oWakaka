@@ -1,14 +1,25 @@
 //! 运行配置与通用 TOML 配置读写工具。
 //!
-//! 凭据文件约定（均含密钥、已被 git 忽略，模板见项目根 `config.example.toml`）：
-//! - `config.toml`：正式代码使用，经 [`Config::load`] 读取
-//! - `config.test.toml`：需真实凭据的测试使用（`#[ignore]`，`cargo test -- --ignored`）
+//! # 存储拆分（DB-2）
+//! 正式配置的**设置 JSON**（provider/base_url/model/api/stream/[models] 别名）
+//! 存 SQLite [`kv`](crate::db::Db::kv_set) 表（键 `config`），`config.toml` 只
+//! 剩 `api_key`——**库里有配置、文件里留凭据**：备份/导出 DB 不泄密。
+//! 老式全量 `config.toml` 仍兼容：DB 无配置时作为回落读取源，首次
+//! [`Config::save`] 自动完成拆分迁移。
 //!
-//! 文档测试不依赖上述本地文件：用 [`load_toml`]/[`store_toml`] 在临时目录自造配置。
+//! 凭据文件约定（均含密钥、已被 git 忽略，模板见项目根 `config.example.toml`）：
+//! - `config.toml`：正式代码使用，经 [`Config::load`]（kv + 密钥两路组装）
+//! - `config.test.toml`：需真实凭据的测试使用（**保持全量 TOML**，[`load_toml`]
+//!   直读不碰 DB；`#[ignore]`，`cargo test -- --ignored`）
+//!
+//! 文档测试不依赖上述本地文件：用 [`load_toml`]/[`store_toml`] 与
+//! [`Db::open_in_memory`] 在临时目录自造配置。
 
 use std::{collections::BTreeMap, error::Error, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
+
+use crate::db::Db;
 
 /// 从 TOML 文件读取任意配置类型（通用工具，不限于 [`Config`]）。
 pub fn load_toml<T: serde::de::DeserializeOwned>(
@@ -19,7 +30,8 @@ pub fn load_toml<T: serde::de::DeserializeOwned>(
 
 /// 将任意可序列化配置以 pretty TOML 写入文件（通用工具）。
 ///
-/// 读写往返与 Debug 脱敏一起验证，无需本地凭据文件：
+/// 读写往返与 Debug 脱敏一起验证，无需本地凭据文件；注意 [`Config`] 的
+/// `api_key` 序列化即丢（skip），密钥落盘只经 [`Secrets`]：
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,6 +48,7 @@ pub fn load_toml<T: serde::de::DeserializeOwned>(
 ///     ..Config::default()
 /// };
 /// store_toml(&cfg, &path)?;
+/// let raw = std::fs::read_to_string(&path)?;
 /// let back: Config = load_toml(&path)?;
 /// std::fs::remove_file(&path).ok();
 ///
@@ -43,7 +56,9 @@ pub fn load_toml<T: serde::de::DeserializeOwned>(
 /// assert_eq!(back.model, cfg.model);
 /// assert_eq!(back.api, Some(Api::Responses));
 /// assert_eq!(back.models["gpt-4o-mini"], "主力模型");
-/// // Debug 输出必须脱敏（防止日志泄漏密钥）
+/// // 密钥不随 Config 序列化（文件与 DB 同理）；Debug 输出恒脱敏
+/// assert!(!raw.contains("sk-test"));
+/// assert!(back.api_key.is_empty());
 /// assert!(!format!("{cfg:?}").contains(&cfg.api_key));
 /// # Ok(())
 /// # }
@@ -122,7 +137,9 @@ pub struct Config {
     /// custom 必填；定制提供商缺省用内置端点，显式写了以显式为准
     #[serde(default)]
     pub base_url: String,
-    /// Bearer 鉴权密钥，仅存在于本地配置文件，不进代码库
+    /// Bearer 鉴权密钥：只存本地 `config.toml`（[`Secrets`]），配置 JSON 与
+    /// DB 一律不落（序列化恒 skip；反序列化容缺省，密钥由 load 两路组装回填）
+    #[serde(default, skip_serializing)]
     pub api_key: String,
     /// 当前激活模型名，随请求体 `model` 字段发送；UI 切换后回写此字段
     pub model: String,
@@ -136,6 +153,41 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, String>,
 }
+
+/// 本地 `config.toml` 的唯一内容：DB-2 起设置进库、凭据留在文件。
+///
+/// 反序列化容忍多余字段 = 老全量 config.toml 与迁移前文件都能直读密钥。
+///
+/// ```
+/// use o_wakaka::ai::config::Secrets;
+///
+/// // 从老全量 toml 提取密钥（其余字段忽略）
+/// let s: Secrets = toml::from_str("base_url=\"u\"\napi_key=\"sk-x\"\nmodel=\"m\"\n").unwrap();
+/// assert_eq!(s.api_key, "sk-x");
+/// // 缺密钥字段不炸（空串由 UI 保存路径提示补填）
+/// let e: Secrets = toml::from_str("").unwrap();
+/// assert!(e.api_key.is_empty());
+/// // Debug 恒脱敏（同 Config 纪律）
+/// assert!(!format!("{s:?}").contains("sk-x"));
+/// ```
+#[derive(Serialize, Deserialize, Default)]
+pub struct Secrets {
+    /// Bearer 鉴权密钥
+    #[serde(default)]
+    pub api_key: String,
+}
+
+/// 手动实现：恒脱敏，防 `{:?}`/日志/panic 泄漏密钥（与 [`Config`] 同纪律）。
+impl std::fmt::Debug for Secrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Secrets")
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// 设置 JSON 在 [`kv`](crate::db::Db::kv_get) 表中的键名。
+const KV_KEY: &str = "config";
 
 /// 手动实现：`api_key` 恒为脱敏占位，防止 `{:?}`/日志/panic 输出泄漏密钥。
 impl std::fmt::Debug for Config {
@@ -153,11 +205,66 @@ impl std::fmt::Debug for Config {
 }
 
 impl Config {
-    /// 读取正式配置 `config.toml`（相对于运行时工作目录）。
+    /// 读运行配置（两路组装）：设置 JSON 取 DB kv `config` 键，密钥取
+    /// `config.toml`（相对工作目录）；DB 无配置时回落读老式全量 toml。
     ///
-    /// 需真实凭据的测试请改用 [`load_toml`] 读取 `config.test.toml`。
-    pub fn load() -> Result<Self, Box<dyn Error>> {
-        load_toml("config.toml")
+    /// 需真实凭据的测试请改用 [`load_toml`] 直读全量 `config.test.toml`（不碰 DB）。
+    pub fn load(db: &Db) -> Result<Self, Box<dyn Error>> {
+        Self::load_at(db, "config.toml")
+    }
+
+    /// [`load`](Self::load) 的路径参数化版（doctest 自给自足用）。
+    ///
+    /// 回落与迁移、密钥不进 DB、拆分保存后往返，全部离线可验：
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use o_wakaka::ai::config::Config;
+    /// use o_wakaka::db::Db;
+    ///
+    /// let db = Db::open_in_memory()?;
+    /// let path = std::env::temp_dir().join("o_wakaka_cfgmerge_doctest.toml");
+    ///
+    /// // 老全量 toml：DB 空时回落直读，密钥即来自文件
+    /// std::fs::write(&path, "base_url=\"u\"\napi_key=\"sk-old\"\nmodel=\"m\"\n")?;
+    /// let cfg = Config::load_at(&db, &path)?;
+    /// assert_eq!((cfg.base_url.as_str(), cfg.api_key.as_str(), cfg.model.as_str()), ("u", "sk-old", "m"));
+    ///
+    /// // save：设置进 DB（不含密钥），toml 瘦身为仅 api_key —— 首次保存即完成迁移
+    /// cfg.save_at(&db, &path)?;
+    /// assert!(!db.kv_get("config")?.unwrap().contains("sk-old"));
+    /// assert_eq!(std::fs::read_to_string(&path)?.trim(), "api_key = \"sk-old\"");
+    ///
+    /// // "重启"后一切如旧：字段读自 DB，密钥读自瘦身文件
+    /// let back = Config::load_at(&db, &path)?;
+    /// assert_eq!((back.base_url.as_str(), back.api_key.as_str(), back.model.as_str()), ("u", "sk-old", "m"));
+    /// std::fs::remove_file(&path).ok();
+    /// # Ok(()) }
+    /// ```
+    pub fn load_at(db: &Db, secrets_path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        let mut cfg: Config = match db.kv_get(KV_KEY)? {
+            Some(json) => serde_json::from_str(&json)?,
+            None => load_toml(secrets_path.as_ref())?,
+        };
+        cfg.api_key = load_toml::<Secrets>(secrets_path)?.api_key;
+        Ok(cfg)
+    }
+
+    /// 保存配置：设置 JSON 写 DB kv（恒不含密钥），`config.toml` 重写为
+    /// 仅 [`Secrets`]——对老全量文件即完成一次性拆分迁移（幂等）。
+    pub fn save(&self, db: &Db) -> Result<(), Box<dyn Error>> {
+        self.save_at(db, "config.toml")
+    }
+
+    /// [`save`](Self::save) 的路径参数化版（doctest 自给自足用）。
+    pub fn save_at(&self, db: &Db, secrets_path: impl AsRef<Path>) -> Result<(), Box<dyn Error>> {
+        db.kv_set(KV_KEY, &serde_json::to_string(self)?)?;
+        store_toml(
+            &Secrets {
+                api_key: self.api_key.clone(),
+            },
+            secrets_path,
+        )
     }
 
     /// 生效根地址：显式写的 `base_url` 优先，其次提供商内置默认；空 = 未配置。

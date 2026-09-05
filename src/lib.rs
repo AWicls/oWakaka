@@ -8,7 +8,8 @@
 //! - [`db`]：SQLite 会话/消息持久化（主线程单连接同步读写）
 //! - [`ui`]：Slint 对话壳，唯一接口 [`ui::run`]；`main.rs` 仅转发至此
 //!
-//! 运行凭据不进代码库：正式代码读 `config.toml`（`Config::load`），测试读 `config.test.toml`，
+//! 配置与凭据不进代码库：设置 JSON 存 `data/owakaka.db`（kv 表），`config.toml`
+//! 只剩 `api_key`（库中放配置、凭据留文件）；测试读全量 `config.test.toml`，
 //! 模板见 `config.example.toml`。
 
 pub mod ai;

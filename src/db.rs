@@ -1,4 +1,4 @@
-//! 数据库层（SQLite，经 rusqlite bundled）：对话会话与消息持久化。
+//! 数据库层（SQLite，经 rusqlite bundled）：对话会话/消息 + 配置存储。
 //!
 //! # 设计约定（2026-09-05 规划讨论定案）
 //! - **混合式表**：要 WHERE/ORDER BY/建索引的字段成列，其余进 `payload` JSON 叶子；
@@ -10,14 +10,16 @@
 //!   故所有 `&self` 方法可被 UI 闭包自由共享（`Rc<Db>`）。
 //! - **预埋**：`session.persona_id`（DB-3 角色设定）、`message.origin`（P2 A2A
 //!   外部来路）当前恒为默认值，占列免将来 ALTER。
+//! - **kv 表**（DB-2）：小配置 JSON 一站一值（如 `config` = 运行配置，密钥除外，
+//!   见 [`crate::ai::config`]）；`CHECK(json_valid)` 挡住误写的裸字符串。
 
 use std::{error::Error, fs, path::Path};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 /// 当前 schema 版本。改动表结构 = 此数 +1，旧库整库重建（开发期策略）。
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// SQLite 生成的"现在"：RFC3339 UTC 带毫秒（strftime 的 %f 输出 SS.mmm）。
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
@@ -153,6 +155,12 @@ impl Db {
         conn.execute_batch(&format!(
             "DROP TABLE IF EXISTS message;
              DROP TABLE IF EXISTS session;
+             DROP TABLE IF EXISTS kv;
+             CREATE TABLE kv (
+               key        TEXT PRIMARY KEY,
+               value      TEXT NOT NULL CHECK (json_valid(value)),
+               updated_at TEXT NOT NULL DEFAULT ({NOW})
+             );
              CREATE TABLE session (
                id           INTEGER PRIMARY KEY,
                title        TEXT    NOT NULL DEFAULT '',
@@ -176,6 +184,42 @@ impl Db {
                UNIQUE (session_id, seq)
              );"
         ))?;
+        Ok(())
+    }
+
+    /// 读 kv 一站：未存过为 `None`；值是 JSON 文本（写入侧有 CHECK 保证）。
+    ///
+    /// 存取自成一体，覆盖即 upsert，非 JSON 值被 CHECK 拒绝：
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use o_wakaka::db::Db;
+    ///
+    /// let db = Db::open_in_memory()?;
+    /// assert_eq!(db.kv_get("config")?, None);
+    /// db.kv_set("config", r#"{"model":"m1"}"#)?;
+    /// assert_eq!(db.kv_get("config")?.as_deref(), Some(r#"{"model":"m1"}"#));
+    /// db.kv_set("config", r#"{"model":"m2"}"#)?;
+    /// assert_eq!(db.kv_get("config")?.as_deref(), Some(r#"{"model":"m2"}"#));
+    /// assert!(db.kv_set("config", "not json").is_err());
+    /// # Ok(()) }
+    /// ```
+    pub fn kv_get(&self, key: &str) -> Result<Option<String>, Box<dyn Error>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// 写 kv 一站（value 必须是合法 JSON 文本；upsert 同时刷新 updated_at）。
+    pub fn kv_set(&self, key: &str, value: &str) -> Result<(), Box<dyn Error>> {
+        self.conn.execute(
+            &format!(
+                "INSERT INTO kv (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = {NOW}"
+            ),
+            rusqlite::params![key, value],
+        )?;
         Ok(())
     }
 
