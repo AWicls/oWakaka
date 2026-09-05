@@ -1,0 +1,119 @@
+// 底层配色系统：Theme 全局（模式 + 双套 VS Code 现代色 token）与 SVG 图标组件。
+// 色值源：microsoft/vscode extensions/theme-defaults/themes/{dark_modern,light_modern}.json
+//（dark_modern 的 list.* 继承自 dark_plus.json）。全应用只允许从这里取色。
+
+import { Palette } from "std-widgets.slint";
+
+/// 一套完整的语义色。字段用 camelCase：Slint struct 字段不含连字符归一化。
+export struct ThemePalette {
+    windowBg: color,        // 应用壳底（sideBar.background）
+    panelBg: color,         // 三框卡片底（editor.background）
+    panelBorder: color,     // 卡片描边（panel.border）
+    inputBorder: color,     // 输入/次级描边（input.border）
+    textPrimary: color,     // 正文（editor.foreground）
+    textSecondary: color,   // 次要（descriptionForeground）
+    textMuted: color,       // 弱化/占位（input.placeholderForeground）
+    accent: color,          // 主强调/主按钮（button.background）
+    accentHover: color,     // 主按钮悬停（button.hoverBackground）
+    accentSoftBg: color,    // 强调浅底（Thinking 激活态）
+    accentSoftBorder: color, // 强调浅描边
+    link: color,            // 链接/激活文字（textLink.foreground）
+    listHover: color,       // 列表悬停（list.hoverBackground）
+    listActive: color,      // 列表选中（list.activeSelectionBackground）
+    bubbleAssistant: color, // 助手气泡底（welcomePage.tileBackground 系）
+    handle: color,          // 拖拽条（前景黑白极，配透明度用）
+    disabledBg: color,      // 按钮禁用底（button.secondaryBackground 系）
+}
+
+/// 主题全局：mode 0=浅色 1=深色 2=跟随系统（默认）。
+/// sys-dark 读内置 Palette 的解析结果——fluent 调色板缺省即系统深浅色。
+export global Theme {
+    in-out property <int> mode: 2;
+    in property <bool> sys-dark: Palette.color-scheme == ColorScheme.dark;
+    out property <bool> dark: Theme.mode == 1 || (Theme.mode == 2 && Theme.sys-dark);
+
+    property <ThemePalette> light-p: {
+        windowBg: #F3F3F3, panelBg: #FFFFFF, panelBorder: #E5E5E5,
+        inputBorder: #CECECE, textPrimary: #3B3B3B, textSecondary: #616161,
+        textMuted: #767676, accent: #005FB8, accentHover: #0258A8,
+        accentSoftBg: #005FB81F, accentSoftBorder: #005FB84D, link: #0066BF,
+        listHover: #F2F2F2, listActive: #E8E8E8, bubbleAssistant: #F5F5F5,
+        handle: #000000, disabledBg: #E5E5E5
+    };
+    property <ThemePalette> dark-p: {
+        windowBg: #181818, panelBg: #1F1F1F, panelBorder: #2B2B2B,
+        inputBorder: #3C3C3C, textPrimary: #CCCCCC, textSecondary: #9D9D9D,
+        textMuted: #868686, accent: #0078D4, accentHover: #026EC1,
+        accentSoftBg: #0078D426, accentSoftBorder: #0078D466, link: #4DAAFC,
+        listHover: #2A2D2E, listActive: #094771, bubbleAssistant: #2B2B2B,
+        handle: #FFFFFF, disabledBg: #353535
+    };
+    out property <ThemePalette> p: Theme.dark ? Theme.dark-p : Theme.light-p;
+}
+
+/// 通用图标（SVG path，viewBox 16×16）：0 太阳 | 1 月亮 | 2 显示器 | 3 对勾。
+/// 全部描边式（对勾/太阳/显示器），月亮为填充；单色随 color 参数主题化。
+export component Icon inherits Rectangle {
+    in property <int> which;
+    in property <brush> ink; // 命名避开 Rectangle.color(=background) 内置别名
+
+    // 太阳：圆环 + 8 束光线（描边）
+    Path {
+        visible: root.which == 0;
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.ink;
+        stroke-width: 1.3px;
+        stroke-line-cap: round;
+        fill: transparent;
+        commands: "M10.6,8 A2.6,2.6 0 1,1 5.4,8 A2.6,2.6 0 1,1 10.6,8 M8,2 V3.8 M8,12.2 V14 M2,8 H3.8 M12.2,8 H14 M3.6,3.6 L5,5 M11,11 L12.4,12.4 M12.4,3.6 L11,5 M5,11 L3.6,12.4";
+    }
+    // 月亮：月牙（填充）
+    Path {
+        visible: root.which == 1;
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: root.ink;
+        stroke: transparent;
+        commands: "M9.6,2.2 A6.5,6.5 0 1,0 13.8,9 A5.2,5.2 0 1,1 9.6,2.2 Z";
+    }
+    // 显示器：屏幕 + 底座（描边）
+    Path {
+        visible: root.which == 2;
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.ink;
+        stroke-width: 1.3px;
+        stroke-line-cap: round;
+        fill: transparent;
+        commands: "M2.2,3.4 H13.8 V10.6 H2.2 Z M6.4,13.6 H9.6 M8,10.6 V13.6";
+    }
+    // 对勾（描边）
+    Path {
+        visible: root.which == 3;
+        width: parent.width;
+        height: parent.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.ink;
+        stroke-width: 1.6px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        fill: transparent;
+        commands: "M3,8.6 L6.4,12 L13,4.6";
+    }
+}

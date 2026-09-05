@@ -1,9 +1,10 @@
 // oWakaka P0 对话壳装配层：AppWindow 三框布局——左会话栏（session.slint，可拖宽）
 // | 右上对话区（bubble.slint 气泡） | 右下输入区（input.slint，可拖高）。
 // 拖拽条见 splitter.slint；ChatMessage/SessionItem 在此统一再导出供 Rust 消费。
-// 当前为硬编码深色配色，浅色/深色自适应后续增量处理。
+// 配色一律取自 theme.slint 的 Theme 全局（VS Code 现代深/浅双主题 + 跟随系统）。
 
 import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
@@ -14,7 +15,7 @@ export { ChatMessage, SessionItem }
 
 export component AppWindow inherits Window {
     title: "oWakaka";
-    background: #17181c;
+    background: Theme.p.windowBg;
     preferred-width: 1120px;
     preferred-height: 720px;
     min-width: 720px;
@@ -57,10 +58,10 @@ export component AppWindow inherits Window {
             // 聊天卡片：吃满剩余高度；滚动区四周留白 8px
             Rectangle {
                 vertical-stretch: 1;
-                background: #1e2026;
+                background: Theme.p.panelBg;
                 border-radius: 14px;
                 border-width: 1px;
-                border-color: #ffffff14;
+                border-color: Theme.p.panelBorder;
                 clip: true;
 
                 ScrollView {

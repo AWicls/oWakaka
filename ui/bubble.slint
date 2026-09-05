@@ -1,5 +1,7 @@
 // 消息气泡：ChatMessage 数据源 + Bubble 组件（助手含思考三态展示）。
 
+import { Theme } from "theme.slint";
+
 /// 一条聊天消息（气泡数据源）
 export struct ChatMessage {
     role: string, // "user" | "assistant"
@@ -33,7 +35,7 @@ export component Bubble inherits Rectangle {
             x: 4px;
             y: 3px;
             text: (root.msg.tstate == 0 ? "▸ " : "▾ ") + "Thinking……";
-            color: #8f96a3;
+            color: Theme.p.textSecondary;
             font-size: 13px;
         }
     }
@@ -46,9 +48,9 @@ export component Bubble inherits Rectangle {
         y: think-btn.y + think-btn.height + 4px;
         width: root.width * 0.82;
         height: think-view.height + 12px;
-        background: #ffffff0a;
+        background: Theme.p.listHover;
         border-width: 1px;
-        border-color: #6b728099;
+        border-color: Theme.p.inputBorder;
         border-radius: 8px;
         clip: true;
 
@@ -72,7 +74,7 @@ export component Bubble inherits Rectangle {
                 width: parent.width - 8px;
                 text: root.msg.thinking;
                 wrap: word-wrap;
-                color: #b8bec8;
+                color: Theme.p.textSecondary;
                 font-size: 13px;
             }
             // 滚轮直接处理（accept 阻止外层列表截获）：落回底部 2px 内恢复贴底跟随
@@ -101,8 +103,10 @@ export component Bubble inherits Rectangle {
             : has-thinking ? think-btn.y + think-btn.height + 4px
             : 6px;
         border-radius: 14px;
-        background: is-user ? #2f6fed : #2c2e35;
+        background: is-user ? Theme.p.accent : Theme.p.bubbleAssistant;
         height: msg-text.height + 16px;
+        // 用户气泡压强调色底用白字；助手气泡用主题正文色（浅色主题下原固定白字不可读）
+        property <color> fg: is-user ? white : Theme.p.textPrimary;
 
         msg-text := Text {
             x: 12px;
@@ -110,7 +114,7 @@ export component Bubble inherits Rectangle {
             width: parent.width - 24px;
             text: root.msg.text;
             wrap: word-wrap;
-            color: #f3f4f6;
+            color: answer.fg;
             horizontal-alignment: answer.is-user ? right : left;
         }
     }
@@ -128,7 +132,7 @@ export component Bubble inherits Rectangle {
             x: 6px;
             y: 3px;
             text: "复制";
-            color: #8f96a3;
+            color: Theme.p.textSecondary;
             font-size: 12px;
         }
     }

@@ -1,6 +1,8 @@
 // 可拖拽分隔条：VSplitter（改左栏宽）/ HSplitter（改输入区高）。
 // 悬停/拖动时小白条提亮，position 由使用方 min/max 约束。
 
+import { Theme } from "theme.slint";
+
 /// 纵向拖拽条：position = 左栏宽度。按住拖动即改写 position（打断外部初始
 /// 绑定后钉死），悬停/拖动时小白条提亮；取值范围由使用方 min/max 约束。
 export component VSplitter inherits Rectangle {
@@ -33,7 +35,7 @@ export component VSplitter inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         border-radius: 2px;
-        background: white;
+        background: Theme.p.handle;
         opacity: (ta.pressed || ta.has-hover) ? 0.85 : 0.18;
     }
 }
@@ -69,7 +71,7 @@ export component HSplitter inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         border-radius: 2px;
-        background: white;
+        background: Theme.p.handle;
         opacity: (ta.pressed || ta.has-hover) ? 0.85 : 0.18;
     }
 }

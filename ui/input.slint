@@ -1,6 +1,7 @@
 // 输入区卡片：无框自绘编辑器（ScrollView + TextInput）+ Thinking/发送停止按钮行。
 
-import { Button, ScrollView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
 
 /// 输入区卡片：总高由外层拖拽条（HSplitter.position）控制。
 /// 编辑器为自绘无框区（std ScrollView + 原生 TextInput）：fluent 内置 TextEdit 的
@@ -13,10 +14,10 @@ export component InputArea inherits Rectangle {
     callback stop-request();
     callback thinking-toggled();
 
-    background: #1e2026;
+    background: Theme.p.panelBg;
     border-radius: 14px;
     border-width: 1px;
-    border-color: #ffffff14;
+    border-color: Theme.p.panelBorder;
 
     ed-area := ScrollView {
         x: 12px;
@@ -32,7 +33,8 @@ export component InputArea inherits Rectangle {
             single-line: false;
             wrap: word-wrap;
             font-size: 14px;
-            color: #f3f4f6;
+            color: Theme.p.textPrimary;
+            selection-background-color: Theme.p.accentSoftBg;
             page-height: ed-area.visible-height;
             // 先于内置编辑处理按键：Ctrl+Enter 发送并吞掉；普通 Enter 放行 → 换行。
             // 生成中/空文本也吞掉组合键，避免插入多余换行
@@ -67,7 +69,7 @@ export component InputArea inherits Rectangle {
         height: 20px;
         Text {
             text: ti.text == "" ? "输入消息，Ctrl+Enter 发送（Enter 换行）" : "";
-            color: #6b7280;
+            color: Theme.p.textMuted;
             font-size: 14px;
             vertical-alignment: top;
         }
@@ -87,8 +89,9 @@ export component InputArea inherits Rectangle {
             height: 28px;
             border-radius: 8px;
             border-width: 1px;
-            border-color: root.thinking-on ? #2f6fed66 : #ffffff26;
-            background: root.thinking-on ? #2f6fed26 : (th-ta.has-hover ? #ffffff1a : #ffffff0d);
+            border-color: root.thinking-on ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
+            background: root.thinking-on ? Theme.p.accentSoftBg
+                : (th-ta.has-hover ? Theme.p.listHover : transparent);
             th-ta := TouchArea {
                 width: parent.width;
                 height: parent.height;
@@ -99,24 +102,41 @@ export component InputArea inherits Rectangle {
                 x: 10px;
                 y: (parent.height - self.height) / 2;
                 text: root.thinking-on ? "● Thinking" : "○ Thinking";
-                color: root.thinking-on ? #9db9ff : #8f96a3;
+                color: root.thinking-on ? Theme.p.link : Theme.p.textSecondary;
                 font-size: 13px;
             }
         }
         // 弹性占位，发送/停止按钮贴右下
         Rectangle { }
-        Button {
+        // 自绘主按钮（fluent Button 无法随应用主题变色）：VS Code button 语义
+        send-btn := Rectangle {
             width: 132px;
             height: 28px;
-            text: root.generating ? "■ 停止" : "发送 (Ctrl+Enter)";
-            enabled: root.generating || ti.text != "";
-            clicked => {
-                if (root.generating) {
-                    root.stop-request();
-                } else {
-                    root.send-submit(ti.text);
-                    ti.text = "";
+            border-radius: 8px;
+            property <bool> can: root.generating || ti.text != "";
+            background: !can ? Theme.p.disabledBg
+                : (sb.has-hover && can ? Theme.p.accentHover : Theme.p.accent);
+            sb := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                enabled: send-btn.can;
+                mouse-cursor: pointer;
+                clicked => {
+                    if (root.generating) {
+                        root.stop-request();
+                    } else {
+                        root.send-submit(ti.text);
+                        ti.text = "";
+                    }
                 }
+            }
+            Text {
+                width: parent.width;
+                y: (parent.height - self.height) / 2;
+                text: root.generating ? "■ 停止" : "发送 (Ctrl+Enter)";
+                color: send-btn.can ? white : Theme.p.textMuted;
+                font-size: 14px;
+                horizontal-alignment: center;
             }
         }
     }
