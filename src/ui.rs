@@ -162,10 +162,16 @@ pub fn run() -> Result<(), slint::PlatformError> {
     Ok(())
 }
 
-/// 每次发送现读 DB 活跃角色行组装轮次人设（毫秒级，读失败按无角色处理不阻断发送）。
-/// 助手/用户两段提示词与温度全空 → `None`（请求与旧行为逐位一致）。
-fn persona_for_turn(db: &Db) -> Option<TurnPersona> {
-    let a = db.active_persona("assistant").ok().flatten();
+/// 每次发送现读 DB 组装轮次人设（毫秒级，读失败按无角色处理不阻断发送）：
+/// 助手段 = `persona_id` 绑定的会话助手（未绑定/已删/悬空回落默认助手），
+/// 用户人设仍全局一份。两段提示词与温度全空 → `None`（请求与旧行为逐位一致）。
+fn persona_for_turn(db: &Db, persona_id: i64) -> Option<TurnPersona> {
+    let a = db
+        .assistant(persona_id)
+        .ok()
+        .flatten()
+        .filter(|a| !a.deleted)
+        .or_else(|| db.default_assistant().ok());
     let u = db.active_persona("user").ok().flatten();
     let p = TurnPersona {
         system_prompt: a
@@ -252,8 +258,11 @@ fn wire_chat(window: &AppWindow, ctx: &Ctx) {
                     thinking: host.thinking_on.get() && models.supports_thinking(&active_model),
                     // 模型下拉的激活项；config 缺失时为空串→回落客户端默认模型
                     model: Some(active_model),
-                    // 每次发送现读 DB 活跃角色行（毫秒级）；未设定 = None 零变化
-                    persona: persona_for_turn(&db),
+                    // 会话绑定助手（-1/悬空回落默认）；user 人设全局注入
+                    persona: persona_for_turn(
+                        &db,
+                        host.persona_ids.borrow().get(sid).copied().unwrap_or(-1),
+                    ),
                 },
                 {
                     let tx = tx.clone();

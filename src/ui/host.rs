@@ -59,6 +59,9 @@ pub(super) struct Host {
     pub(super) runs: Rc<RefCell<Vec<RunState>>>,
     /// 每会话的 DB rowid，与 `items` 同下标（落库定位键）
     pub(super) db_ids: Rc<RefCell<Vec<i64>>>,
+    /// 每会话绑定的助手（persona 行 id），与 `items` 平行下标；
+    /// `-1` = 未绑定（占位行/读取失败），发送与读侧回落默认助手
+    pub(super) persona_ids: Rc<RefCell<Vec<i64>>>,
     /// 当前可见会话下标
     pub(super) current: Rc<Cell<usize>>,
     /// 思考模式开关（发送时读取；进行中的生成不受影响）
@@ -77,6 +80,7 @@ impl Host {
             models: Rc::new(RefCell::new(Vec::new())),
             runs: Rc::new(RefCell::new(Vec::new())),
             db_ids: Rc::new(RefCell::new(Vec::new())),
+            persona_ids: Rc::new(RefCell::new(Vec::new())),
             current: Rc::new(Cell::new(0)),
             thinking_on: Rc::new(Cell::new(true)),
         };
@@ -85,12 +89,12 @@ impl Host {
             Vec::new()
         });
         if loaded.is_empty() {
-            let id = host.create_session_row(NEW_TITLE);
-            host.adopt(id, NEW_TITLE, Vec::new());
+            let (id, pid) = host.create_session_row(NEW_TITLE);
+            host.adopt(id, pid, NEW_TITLE, Vec::new());
         } else {
             for s in loaded {
                 let bubbles = s.messages.into_iter().map(bubble_from).collect();
-                host.adopt(s.id, &s.title, bubbles);
+                host.adopt(s.id, s.persona_id.unwrap_or(-1), &s.title, bubbles);
             }
             // 重启后默认可见 = 最近活动会话（load_all 按活跃升序，即末条）
             let last = host.items.row_count() - 1;
@@ -108,16 +112,28 @@ impl Host {
         host
     }
 
-    /// 插入新会话行；失败记日志并回 `-1` 占位。
-    fn create_session_row(&self, title: &str) -> i64 {
-        self.db.insert_session(title).unwrap_or_else(|e| {
-            eprintln!("创建会话失败（不持久）: {e}");
-            -1
-        })
+    /// 插入新会话行并绑定当前默认助手，返回 `(会话 id, 助手 id)`；
+    /// 失败记日志并回 `-1` 占位。
+    fn create_session_row(&self, title: &str) -> (i64, i64) {
+        let pid = self.db.default_assistant().map_or_else(
+            |e| {
+                eprintln!("读取默认助手失败（会话不绑定）: {e}");
+                -1
+            },
+            |a| a.id,
+        );
+        let sid = self
+            .db
+            .insert_session(title, (pid > 0).then_some(pid))
+            .unwrap_or_else(|e| {
+                eprintln!("创建会话失败（不持久）: {e}");
+                -1
+            });
+        (sid, pid)
     }
 
-    /// 一条会话行并列进四个簿记列表；仅首条自动选中（重启可见性在 new 里另定）。
-    fn adopt(&self, db_id: i64, title: &str, bubbles: Vec<ChatMessage>) {
+    /// 一条会话行并列进五个簿记列表；仅首条自动选中（重启可见性在 new 里另定）。
+    fn adopt(&self, db_id: i64, persona_id: i64, title: &str, bubbles: Vec<ChatMessage>) {
         let active = self.db_ids.borrow().is_empty();
         self.items.push(SessionItem {
             title: title.into(),
@@ -132,6 +148,7 @@ impl Host {
             model: String::new(),
         });
         self.db_ids.borrow_mut().push(db_id);
+        self.persona_ids.borrow_mut().push(persona_id);
     }
 
     pub(super) fn active_model(&self) -> Rc<VecModel<ChatMessage>> {
@@ -155,7 +172,7 @@ impl Host {
                 },
             );
         }
-        let db_id = self.create_session_row(NEW_TITLE);
+        let (db_id, pid) = self.create_session_row(NEW_TITLE);
         let model = Rc::new(VecModel::<ChatMessage>::default());
         self.models.borrow_mut().push(model.clone());
         self.runs.borrow_mut().push(RunState {
@@ -164,6 +181,7 @@ impl Host {
             model: String::new(),
         });
         self.db_ids.borrow_mut().push(db_id);
+        self.persona_ids.borrow_mut().push(pid);
         self.items.push(SessionItem {
             title: NEW_TITLE.into(),
             active: true,
@@ -200,9 +218,10 @@ impl Host {
         self.models.borrow_mut().remove(idx);
         self.runs.borrow_mut().remove(idx);
         self.db_ids.borrow_mut().remove(idx);
+        self.persona_ids.borrow_mut().remove(idx);
         if self.items.row_count() == 0 {
-            let id = self.create_session_row(NEW_TITLE);
-            self.adopt(id, NEW_TITLE, Vec::new());
+            let (id, pid) = self.create_session_row(NEW_TITLE);
+            self.adopt(id, pid, NEW_TITLE, Vec::new());
             self.current.set(0);
         } else {
             let cur = self.current.get();
@@ -235,7 +254,7 @@ impl Host {
     /// 回收站恢复后把会话（含消息）推入侧栏末尾；不改变当前可见。
     pub(super) fn push_restored(&self, s: LoadedSession) {
         let bubbles = s.messages.into_iter().map(bubble_from).collect();
-        self.adopt(s.id, &s.title, bubbles);
+        self.adopt(s.id, s.persona_id.unwrap_or(-1), &s.title, bubbles);
     }
 
     /// 切换可见会话；越界或与当前相同则不动作。

@@ -64,15 +64,23 @@ pub struct LoadedSession {
     pub id: i64,
     /// 侧栏标题
     pub title: String,
+    /// 建会话时绑定的助手（persona 行 id）；`None` = 旧数据/未绑定，读侧回落默认助手
+    pub persona_id: Option<i64>,
     /// 按会话内序号升序
     pub messages: Vec<LoadedMessage>,
 }
 
 impl Db {
-    /// 新建会话，返回行 id。
-    pub fn insert_session(&self, title: &str) -> Result<i64, Box<dyn Error>> {
-        self.conn
-            .execute("INSERT INTO session (title) VALUES (?1)", [title])?;
+    /// 新建会话，返回行 id；`persona_id` = 绑定的助手（建会话时的默认助手）。
+    pub fn insert_session(
+        &self,
+        title: &str,
+        persona_id: Option<i64>,
+    ) -> Result<i64, Box<dyn Error>> {
+        self.conn.execute(
+            "INSERT INTO session (title, persona_id) VALUES (?1, ?2)",
+            rusqlite::params![title, persona_id],
+        )?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -117,18 +125,20 @@ impl Db {
     /// 全量读取**未删除**会话：按活跃时间升序（重启后"最近用过的在最下"，与新建顺序一致），
     /// 消息按会话内序号升序。DB-1 不分页。
     pub fn load_all(&self) -> Result<Vec<LoadedSession>, Box<dyn Error>> {
-        let heads: Vec<(i64, String)> = {
+        let heads: Vec<(i64, String, Option<i64>)> = {
             let mut stmt = self.conn.prepare(
-                "SELECT id, title FROM session WHERE deleted_at IS NULL ORDER BY updated_at, id",
+                "SELECT id, title, persona_id FROM session
+                 WHERE deleted_at IS NULL ORDER BY updated_at, id",
             )?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                 .collect::<Result<Vec<_>, _>>()?
         };
         let mut sessions = Vec::with_capacity(heads.len());
-        for (id, title) in heads {
+        for (id, title, persona_id) in heads {
             sessions.push(LoadedSession {
                 id,
                 title,
+                persona_id,
                 messages: self.messages_of(id)?,
             });
         }
@@ -169,11 +179,13 @@ impl Db {
 
     /// 装载单个会话（含消息）；不存在回 `None`。回收站恢复推入侧栏用。
     pub fn load_session(&self, id: i64) -> Result<Option<LoadedSession>, Box<dyn Error>> {
-        let Some(title) = self
+        let Some((title, persona_id)) = self
             .conn
-            .query_row("SELECT title FROM session WHERE id = ?1", [id], |r| {
-                r.get::<_, String>(0)
-            })
+            .query_row(
+                "SELECT title, persona_id FROM session WHERE id = ?1",
+                [id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)),
+            )
             .optional()?
         else {
             return Ok(None);
@@ -181,6 +193,7 @@ impl Db {
         Ok(Some(LoadedSession {
             id,
             title,
+            persona_id,
             messages: self.messages_of(id)?,
         }))
     }
@@ -210,7 +223,7 @@ impl Db {
     /// use o_wakaka::db::Db;
     ///
     /// let db = Db::open_in_memory()?;
-    /// let sid = db.insert_session("要删的")?;
+    /// let sid = db.insert_session("要删的", None)?;
     /// db.insert_message(sid, "user", "hi", "", None)?;
     ///
     /// db.soft_delete_session(sid)?;
@@ -242,8 +255,8 @@ mod tests {
     #[test]
     fn list_deleted_and_load_session_for_trash() -> Result<(), Box<dyn Error>> {
         let db = Db::open_in_memory()?;
-        let keep = db.insert_session("留")?;
-        let gone = db.insert_session("删")?;
+        let keep = db.insert_session("留", None)?;
+        let gone = db.insert_session("删", None)?;
         db.insert_message(gone, "user", "hi", "", None)?;
         assert!(db.list_deleted()?.is_empty());
 
@@ -263,8 +276,8 @@ mod tests {
     #[test]
     fn seq_is_per_session_and_order_preserved() -> Result<(), Box<dyn Error>> {
         let db = Db::open_in_memory()?;
-        let a = db.insert_session("a")?;
-        let b = db.insert_session("b")?;
+        let a = db.insert_session("a", None)?;
+        let b = db.insert_session("b", None)?;
         db.insert_message(a, "user", "x", "", None)?;
         db.insert_message(a, "assistant", "y", "m1", None)?;
         db.insert_message(b, "user", "z", "", None)?;

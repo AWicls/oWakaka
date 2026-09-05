@@ -34,6 +34,7 @@
   - 「大下巴」真根因（补修）：Window 根变多子元素后 `if` 块（主三框 / SettingsPage）**不再自动撑满窗口**，只有 implicit 高——两处显式 `width/height: root.*`，整页贴窗、随窗口 100% 自适应
 
 ### Added
+- 多助手后台闭环（增量 1/3，纯后台无 UI 变化）：persona 表 assistant kind 放开**多行**，`is_active=1` 语义改为「默认助手」（恒恰一行、不可删、缺失懒播种/自愈）；头像路径/开场白/默认模型 id/软删标记进 `payload` JSON 叶子（混合式表约定，**无 schema 版本变更**）。新增助手 CRUD（`assistants`/`assistant`/`default_assistant`/`insert_assistant`/`save_assistant`/`set_default_assistant`）与两级删除（`soft_delete_assistant`→`restore_assistant`→`purge_assistant`，默认助手两级都不可删）。**会话绑定助手**：`insert_session` 写入 `session.persona_id`（新建会话自动绑当时默认助手，旧数据 NULL 读侧回落）；**发送路径按会话绑定助手**取系统提示词/温度（绑定助手被彻底删除后悬空 id 回落默认助手），用户人设仍全局注入。doctest/单测覆盖 CRUD 往返、默认唯一、自愈、删除保护
 - 无边框窗口 + 自绘标题栏：去掉 Windows 原生外框（Slint `no-frame`），左上角三键（关闭贴最左角，其后最大化·还原/最小化；图标为 Path 描边自绘，不受字体缺字影响；关闭悬停红底白叉）；拖拽区按住即原生移窗（winit `drag_window`，保留 Win11 贴边 snap），双击切最大化，窗口外圈 6px 可拖拽缩放；回收站遮罩只盖内容区，标题栏恒在最上层可窗控
 - 思考能力消费（Step C，能力位首个消费点）：当前模型未勾选「思考」→ Thinking 按钮置灰显「Thinking ✕」，**发送时即使开关开着也强制关**（请求带 `reasoning.effort=none`）；未在提供商登记的模型视为支持，绝不误关
   - 从设置页返回对话时自动重拉模型别名/能力表（页内改过即刻反映到下拉与开关）

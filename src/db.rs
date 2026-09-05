@@ -8,11 +8,11 @@
 //! - **时间戳**：由 SQLite 生成，RFC3339 UTC 带毫秒，字符串即可排序。
 //! - **线程模型**：主线程持单连接同步读写（桌面单用户，操作毫秒级），
 //!   故所有 `&self` 方法可被 UI 闭包自由共享（`Rc<Db>`）。
-//! - **预埋**：`session.persona_id`（DB-3 角色设定）、`message.origin`（P2 A2A
-//!   外部来路）当前恒为默认值，占列免将来 ALTER。
+//! - **预埋**：`message.origin`（P2 A2A 外部来路）当前恒为默认值，占列免将来 ALTER。
 //! - **kv 表**（DB-2）：小配置 JSON 一站一值（如 `providers` = 多提供商档案，密钥除外，
 //!   见 [`crate::ai::config`]）；`CHECK(json_valid)` 挡住误写的裸字符串。
-//! - **persona 表**（DB-3）：角色设定（system prompt / 温度），一 kind 一活跃行。
+//! - **persona 表**（DB-3）：角色设定——user 人设一活跃行；assistant 多助手，
+//!   `is_active=1` 恒一行 = 默认助手，`session.persona_id` 建会话时绑定。
 //! - **删除宪法**：一切"删除"都是两级——先**逻辑删除**（`session.deleted_at` 置时间戳 /
 //!   JSON 条目 `deleted` 标记，可恢复），再经显式**彻底删除**物理清除。列表读取恒过滤
 //!   逻辑删除项。persona/kv 无删除场景；message 随所属会话级联清除。
@@ -20,7 +20,7 @@
 //! # 文件结构
 //! - `db.rs`（本文件）：句柄与 schema——open / PRAGMA / 版本策略 / 建表
 //! - `db/kv.rs`：kv 一站配置存取
-//! - `db/persona.rs`：角色设定活跃行读写
+//! - `db/persona.rs`：用户人设活跃行 + 多助手 CRUD（默认助手恒一行）
 //! - `db/session.rs`：会话与消息、回收站两级删除
 
 mod kv;
@@ -32,7 +32,7 @@ use std::{error::Error, fs, path::Path};
 use rusqlite::Connection;
 
 // 领域类型仍从 db 命名空间露出：外部 use 路径不因拆分而变
-pub use persona::Persona;
+pub use persona::{Assistant, Persona};
 pub use session::{LoadedMessage, LoadedSession, MessagePayload};
 
 /// 当前 schema 版本。改动表结构 = 此数 +1，旧库整库重建（开发期策略；
@@ -42,8 +42,9 @@ pub const SCHEMA_VERSION: i32 = 4;
 /// SQLite 生成的"现在"：RFC3339 UTC 带毫秒（strftime 的 %f 输出 SS.mmm）。
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
-/// persona 表 DDL（v3 起，DB-3 角色设定）：一 kind 一活跃行；`session.persona_id`
-/// 的多人格切换留待后续，当前 UI 只编辑活跃行。温度 NULL = 未设定（请求不发字段）。
+/// persona 表 DDL（v3 起，DB-3 角色设定）：user kind 一活跃行；assistant kind 多行，
+/// `is_active=1` 恒一行 = 默认助手（`session.persona_id` 绑定，头像/开场白/默认模型/
+/// 软删标记在 payload 叶子）。温度 NULL = 未设定（请求不发字段）。
 const PERSONA_DDL: &str = "CREATE TABLE IF NOT EXISTS persona (
                id            INTEGER PRIMARY KEY,
                kind          TEXT    NOT NULL CHECK (kind IN ('user','assistant')),
@@ -68,7 +69,7 @@ const PERSONA_DDL: &str = "CREATE TABLE IF NOT EXISTS persona (
 /// std::fs::remove_file(&path).ok();
 /// {
 ///     let db = Db::open(&path)?;
-///     let sid = db.insert_session("新对话")?;
+///     let sid = db.insert_session("新对话", None)?;
 ///     db.insert_message(sid, "user", "你好", "", None)?;
 ///     db.insert_message(
 ///         sid,
@@ -194,7 +195,7 @@ mod tests {
     #[test]
     fn stale_schema_is_rebuilt_not_migrated() -> Result<(), Box<dyn Error>> {
         let db = Db::open_in_memory()?;
-        let sid = db.insert_session("t")?;
+        let sid = db.insert_session("t", None)?;
         db.insert_message(sid, "user", "hi", "", None)?;
         assert_eq!(db.load_all()?.len(), 1);
 
@@ -208,7 +209,7 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
         assert_eq!(version, SCHEMA_VERSION);
         // 重建后 schema 完整可用
-        let sid = rebuilt.insert_session("fresh")?;
+        let sid = rebuilt.insert_session("fresh", None)?;
         rebuilt.insert_message(sid, "user", "ok", "", None)?;
         assert_eq!(rebuilt.load_all()?[0].messages.len(), 1);
         Ok(())
@@ -218,7 +219,7 @@ mod tests {
     fn v2_v3_upgrades_add_missing_structure_only() -> Result<(), Box<dyn Error>> {
         // v2 库：补 persona 表 + session.deleted_at 列，数据保留、补的列即刻可用
         let db = Db::open_in_memory()?;
-        let sid = db.insert_session("old")?;
+        let sid = db.insert_session("old", None)?;
         db.insert_message(sid, "user", "hi", "", None)?;
         let Db { conn } = db;
         conn.execute("PRAGMA user_version=2", [])?;
@@ -235,7 +236,7 @@ mod tests {
 
         // v3 库：只补列
         let db = Db::open_in_memory()?;
-        let sid = db.insert_session("keep")?;
+        let sid = db.insert_session("keep", None)?;
         db.insert_message(sid, "user", "yo", "", None)?;
         let Db { conn } = db;
         conn.execute("PRAGMA user_version=3", [])?;
