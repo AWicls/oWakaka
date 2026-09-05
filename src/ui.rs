@@ -49,7 +49,7 @@ use crate::ai::{
     providers::Providers,
 };
 use crate::db::Db;
-use slint::{Model, SharedString, Timer, TimerMode, VecModel};
+use slint::{SharedString, Timer, TimerMode};
 
 use bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history};
 use host::{Host, RunRef, StreamMsg};
@@ -330,31 +330,11 @@ fn wire_timer(window: &AppWindow, ctx: &Ctx, rx: mpsc::Receiver<UiMsg>) {
                     continue;
                 }
                 UiMsg::ProvTest(msg) => {
-                    window.set_prov_status(msg);
+                    prov::on_test_result(&window, msg);
                     continue;
                 }
-                UiMsg::ProvFetch(Ok(ids)) => {
-                    let have: Vec<SharedString> = window
-                        .get_prov_models()
-                        .iter()
-                        .map(|m| m.id.clone())
-                        .collect();
-                    let mut rows: Vec<RemoteRow> = ids
-                        .into_iter()
-                        .map(|id| RemoteRow {
-                            added: have.iter().any(|h| h == &id),
-                            id: id.into(),
-                        })
-                        .collect();
-                    rows.sort_by(|a, b| a.added.cmp(&b.added).then(a.id.cmp(&b.id)));
-                    window.set_remote_models(Rc::new(VecModel::from(rows)).into());
-                    window.set_remote_loading(false);
-                    continue;
-                }
-                UiMsg::ProvFetch(Err(e)) => {
-                    window.set_remote_loading(false);
-                    let brief: String = e.chars().take(160).collect();
-                    window.set_prov_status(format!("拉取失败：{brief}").into());
+                UiMsg::ProvFetch(result) => {
+                    prov::on_fetch_result(&window, result);
                     continue;
                 }
             };

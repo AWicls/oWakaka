@@ -122,6 +122,41 @@ pub(super) fn remote_mark_added(window: &AppWindow, model_id: &str, added: bool)
     window.set_remote_models(Rc::new(VecModel::from(rows)).into());
 }
 
+/// 远端清单异步回包 → 窗口：按「未添加优先 + id 升序」重排注入并复位加载态。
+/// 入参与 [`UiMsg::ProvFetch`] 一致，由 ui.rs 的回流 Timer 转调（页面逻辑归本页）。
+pub(super) fn on_fetch_result(window: &AppWindow, result: Result<Vec<String>, String>) {
+    use slint::Model;
+    match result {
+        Ok(ids) => {
+            let have: Vec<SharedString> = window
+                .get_prov_models()
+                .iter()
+                .map(|m| m.id.clone())
+                .collect();
+            let mut rows: Vec<RemoteRow> = ids
+                .into_iter()
+                .map(|id| RemoteRow {
+                    added: have.iter().any(|h| h == &id),
+                    id: id.into(),
+                })
+                .collect();
+            rows.sort_by(|a, b| a.added.cmp(&b.added).then(a.id.cmp(&b.id)));
+            window.set_remote_models(Rc::new(VecModel::from(rows)).into());
+            window.set_remote_loading(false);
+        }
+        Err(e) => {
+            window.set_remote_loading(false);
+            let brief: String = e.chars().take(160).collect();
+            window.set_prov_status(format!("拉取失败：{brief}").into());
+        }
+    }
+}
+
+/// 连通测试异步回包 → 窗口：文案直接写 prov-status。
+pub(super) fn on_test_result(window: &AppWindow, msg: SharedString) {
+    window.set_prov_status(msg);
+}
+
 /// 行级模型改写的统一入口：读当前选中提供商 → 取/建该 model → 应用 f → upsert。
 /// 提供商被删/不可用则写 prov-status 并静默返回。
 /// `quiet` = 只落库不回刷 Slint 列表——逐字符的文本输入专用：
