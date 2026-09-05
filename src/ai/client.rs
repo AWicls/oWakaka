@@ -20,6 +20,7 @@
 //!         base_url: "https://api.openai.com/v1".into(),
 //!         api_key: "sk-test".into(),
 //!         model: "gpt-4o-mini".into(),
+//!         ..Config::default()
 //!     },
 //!     &path,
 //! )?;

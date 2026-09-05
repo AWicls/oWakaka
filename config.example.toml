@@ -2,3 +2,9 @@
 base_url = "https://api.openai.com/v1"
 api_key = "sk-..."
 model = "gpt-4o-mini"
+
+# 对话接口族（两行均可整体省略，省略即默认值）：
+# "chat" = 兼容接口 /chat/completions（默认保底）；"responses" = OpenAI Responses API
+api = "chat"
+# 是否流式输出：true = 逐段增量（默认）；false = 整段一次性返回
+stream = true
