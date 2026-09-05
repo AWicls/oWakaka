@@ -5,7 +5,7 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.3.0] - 2026-09-06
 
 ### Fixed
 - 聊天卡助手头栏垂直居中悬在卡片正中：非布局父级（Rectangle）里的 Layout 定高会被 Slint 求解器垂直居中而非贴顶（实测），头栏 HorizontalLayout 显式钉 `x:0; y:0; width:parent.width` 即回顶部
