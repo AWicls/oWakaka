@@ -49,32 +49,107 @@ component TinyBtn inherits Rectangle {
 }
 
 // —— 无边框自绘标题栏：原生窗口按钮桥（min/max/close/drag）与 CaptionBar 组件 ——
+// 图标一律图元自绘：Unicode ✕/❐ 在默认字体下缺字成豆腐块「口」、且大小不一
 
-/// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger 悬停红底白字（关闭键）
+/// 标题栏 caption 按钮图标种类
+enum CaptionIcon {
+    minimize,
+    maximize,
+    restore,
+    close,
+}
+
+/// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger（关闭）悬停红底白图标
 component CaptionBtn inherits Rectangle {
-    in property <string> glyph;
+    in property <CaptionIcon> icon;
     in property <bool> danger: false;
     callback picked();
 
+    property <brush> fg: ta.has-hover && root.danger ? white : Theme.p.textSecondary;
+    // 实底按钮色（非悬停=标题栏底色）：还原图标前块用它遮住后块重叠线
+    property <brush> btn-bg: ta.has-hover ? (root.danger ? #c42b1c : Theme.p.listHover) : Theme.p.windowBg;
+
     width: 46px;
-    background: ta.has-hover ? (root.danger ? #c42b1c : Theme.p.listHover) : transparent;
+    background: root.btn-bg;
     ta := TouchArea {
         width: parent.width;
         height: parent.height;
+        mouse-cursor: pointer;
         clicked => { root.picked(); }
     }
-    t := Text {
-        width: parent.width;
-        height: parent.height;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        text: root.glyph;
-        font-size: 13px;
-        color: ta.has-hover && root.danger ? white : Theme.p.textSecondary;
+    // 图标统一 16×16 viewbox 描边（同 theme.slint Icon 惯例）
+    // 最小化：横条
+    Path {
+        visible: root.icon == CaptionIcon.minimize;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.fg;
+        stroke-width: 1.2px;
+        fill: transparent;
+        commands: "M3,8 H13";
+    }
+    // 最大化：方框
+    Path {
+        visible: root.icon == CaptionIcon.maximize;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.fg;
+        stroke-width: 1.2px;
+        fill: transparent;
+        commands: "M3,3 H13 V13 H3 Z";
+    }
+    // 还原：后框描边 + 前框实底挡重叠线
+    Path {
+        visible: root.icon == CaptionIcon.restore;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.fg;
+        stroke-width: 1.2px;
+        fill: transparent;
+        commands: "M2,2 H10 V10 H2 Z";
+    }
+    Path {
+        visible: root.icon == CaptionIcon.restore;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.fg;
+        stroke-width: 1.2px;
+        fill: root.btn-bg;
+        commands: "M6,6 H14 V14 H6 Z";
+    }
+    // 关闭：斜交叉
+    Path {
+        visible: root.icon == CaptionIcon.close;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.fg;
+        stroke-width: 1.2px;
+        fill: transparent;
+        commands: "M4,4 L12,12 M12,4 L4,12";
     }
 }
 
-/// 顶部 34px 标题栏：左三键（最小化/最大化·还原/关闭）+ 拖拽区（按下发起原生拖窗，双击切最大化）
+/// 顶部 34px 标题栏：左三键（关闭/最大化·还原/最小化，关闭贴角）+ 拖拽区（按下发起原生拖窗，双击切最大化）
 component CaptionBar inherits Rectangle {
     in property <bool> is-maximized;
     callback win-minimize();
@@ -86,17 +161,17 @@ component CaptionBar inherits Rectangle {
     HorizontalLayout {
         spacing: 0px;
         CaptionBtn {
-            glyph: "─";
-            picked => { root.win-minimize(); }
+            icon: CaptionIcon.close;
+            danger: true;
+            picked => { root.win-close(); }
         }
         CaptionBtn {
-            glyph: root.is-maximized ? "❐" : "□";
+            icon: root.is-maximized ? CaptionIcon.restore : CaptionIcon.maximize;
             picked => { root.win-maximize(); }
         }
         CaptionBtn {
-            glyph: "✕";
-            danger: true;
-            picked => { root.win-close(); }
+            icon: CaptionIcon.minimize;
+            picked => { root.win-minimize(); }
         }
         Rectangle {
             horizontal-stretch: 1;
