@@ -699,7 +699,9 @@ export component SettingsPage inherits Rectangle {
                                 }
 
                                 // —— Step B/C：模型管理（列表随内容增高，滚动统一交给外层主体） ——
+                                // stretch 归零：高窗富余高度全给尾部 filler，模型框/按钮行按内容上靠
                                 if root.prov-sel != "" && !root.sel-deleted : VerticalLayout {
+                                    vertical-stretch: 0;
                                     spacing: 6px;
                                     Text {
                                         text: "可用模型";
@@ -708,6 +710,7 @@ export component SettingsPage inherits Rectangle {
                                     }
                                     Rectangle {
                                         min-height: 90px;
+                                        vertical-stretch: 0;
                                         border-radius: 8px;
                                         border-width: 1px;
                                         border-color: Theme.p.inputBorder;
@@ -855,6 +858,8 @@ export component SettingsPage inherits Rectangle {
                                     font-size: 12px;
                                     wrap: word-wrap;
                                 }
+                                // 惰性尾部 filler：viewport 高于内容时独吞富余高（内容超高时归零不影响滚动）
+                                Rectangle { vertical-stretch: 1; }
                             }
                         }
 
