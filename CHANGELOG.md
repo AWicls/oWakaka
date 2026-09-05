@@ -5,6 +5,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.3.1] - 2026-09-06
+
+本版本为**内部重构与技术债清理**，无用户可感知的新功能或行为变化（Rust 层 3 项 + Slint UI 层 3 项；`cargo fmt`/`clippy`/`test` 全绿）。
+
+### Changed
+- 通信层去重：下沉 chat / responses 两端点族共用的 HTTP 发送与 SSE 读循环骨架至 `Client`（新增 `post_json` / `stream_sse` / `encode_body`），消除约 120 行逐字重复，为后续 Anthropic 端点族复用铺路；`Providers` 收敛可变查找 / 逻辑删 / active 兜底三处重复
+- UI 装配归位：提供商回流结果（连通测试 / 远端模型清单）从 `ui.rs` 的回流 Timer 下沉回 `prov.rs`，纠正「页面逻辑归各子模块」的既定边界
+- Slint 组件收口：`Icon` 图标由 `visible` 门控改 `if` 条件实例化（未选中图标不再进渲染树，每处 `Icon` 从常驻 8 节点降到 1），标题栏按钮与侧栏删除叉统一复用 `Icon`；抽 `Card` 通用卡片外框收口 8 处重复样式；合并主题菜单行与模型下拉行为共享 `OptionRow`
+
 ## [0.3.0] - 2026-09-06
 
 ### Fixed
