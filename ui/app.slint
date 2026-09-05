@@ -58,6 +58,7 @@ export component AppWindow inherits Window {
     in property <[ChatMessage]> messages;
     in property <bool> generating; // 当前可见会话是否生成中
     in property <bool> thinking-on; // 思考模式开关（作用于之后的发送）
+    in property <bool> thinking-capable: true; // 当前激活模型支持思考（Step C：不支持则置灰+发送强制关）
     in property <[SessionItem]> sessions;
     in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
     in property <string> model-label; // 当前激活模型显示名
@@ -212,6 +213,7 @@ export component AppWindow inherits Window {
                 height: hs.position;
                 generating: root.generating;
                 thinking-on: root.thinking-on;
+                thinking-capable: root.thinking-capable;
                 models: root.models;
                 model-label: root.model-label;
                 send-submit(text) => { root.send(text); }

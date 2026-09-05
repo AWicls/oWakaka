@@ -65,7 +65,7 @@ enum UiMsg {
     ProvFetch(Result<Vec<String>, String>),
 }
 
-/// 模型切换下拉的 UI 状态：数据源、激活 ID、别名表（config `[models]`）；
+/// 模型切换下拉的 UI 状态：数据源、激活 ID、别名表（当前提供商模型）、思考能力表；
 /// `fetched` 防抖——首次打开下拉才拉远端 `/models`，失败时下回打开可重试
 #[derive(Clone)]
 struct ModelsState {
@@ -73,21 +73,24 @@ struct ModelsState {
     items: Rc<VecModel<ModelItem>>,
     active: Rc<RefCell<String>>,
     aliases: Rc<RefCell<BTreeMap<String, String>>>,
+    caps: Rc<RefCell<BTreeMap<String, bool>>>,
     fetched: Rc<Cell<bool>>,
 }
 
 impl ModelsState {
-    /// 初始值取自运行配置（model + [models]）；读不到则空激活（发送回落客户端默认）
+    /// 初始值取自运行配置（model + 提供商模型别名/能力）；读不到则空激活（发送回落客户端默认）
     fn from_config(db: Rc<Db>) -> Self {
         let (active, aliases) = match Config::load(&db) {
             Ok(cfg) => (cfg.model, cfg.models),
             Err(_) => (String::new(), BTreeMap::new()),
         };
+        let caps = load_caps(&db);
         let state = Self {
             db,
             items: Rc::new(VecModel::default()),
             active: Rc::new(RefCell::new(active)),
             aliases: Rc::new(RefCell::new(aliases)),
+            caps: Rc::new(RefCell::new(caps)),
             fetched: Rc::new(Cell::new(false)),
         };
         state.rebuild(None);
@@ -142,7 +145,7 @@ impl ModelsState {
         self.items.set_vec(rows);
     }
 
-    /// 把状态同步到窗口（下拉数据源 + 模型按钮文案）
+    /// 把状态同步到窗口（下拉数据源 + 模型按钮文案 + 思考能力位）
     fn apply(&self, window: &AppWindow) {
         window.set_models(self.items.clone().into());
         let active = self.active.borrow().clone();
@@ -152,6 +155,23 @@ impl ModelsState {
             self.display(&active)
         };
         window.set_model_label(label);
+        let capable = self.supports_thinking(&active);
+        window.set_thinking_capable(capable);
+    }
+
+    /// 当前激活模型是否支持思考（未登记的模型视为支持，绝不误关）
+    fn supports_thinking(&self, id: &str) -> bool {
+        self.caps.borrow().get(id).copied().unwrap_or(true)
+    }
+
+    /// 从设置页返回后重拉提供商数据源（模型增删/别名/能力可能已变）
+    fn sync_store(&self, window: &AppWindow) {
+        if let Ok(cfg) = Config::load(&self.db) {
+            *self.aliases.borrow_mut() = cfg.models;
+        }
+        *self.caps.borrow_mut() = load_caps(&self.db);
+        self.rebuild(None);
+        self.apply(window);
     }
 
     /// 切换激活模型：本会话即时生效（后续发送携带）并回写设置（DB kv），
@@ -594,7 +614,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 &runtime,
                 history,
                 TurnOptions {
-                    thinking: host.thinking_on.get(),
+                    // Step C：当前模型声明不支持思考 → 即使开关开着也强制关
+                    thinking: host.thinking_on.get() && models.supports_thinking(&active_model),
                     // 模型下拉的激活项；config 缺失时为空串→回落客户端默认模型
                     model: Some(active_model),
                     // 每次发送现读 DB 活跃角色行（毫秒级）；未设定 = None 零变化
@@ -702,9 +723,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
         window.on_settings_back({
             let window_weak = window.as_weak();
+            let models = models.clone();
             move || {
                 if let Some(w) = window_weak.upgrade() {
                     w.set_settings_page(false);
+                    // 提供商/模型/能力可能在页内改过：回对话前重拉一次数据源
+                    models.sync_store(&w);
                 }
             }
         });
@@ -1080,6 +1104,21 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.show()?;
     slint::run_event_loop()?;
     Ok(())
+}
+
+/// 当前提供商的模型 id → 是否支持思考（Step B 能力位的第一个消费点）。
+fn load_caps(db: &Db) -> BTreeMap<String, bool> {
+    Providers::load(db)
+        .ok()
+        .and_then(|ps| {
+            ps.active_entry().map(|e| {
+                e.models
+                    .iter()
+                    .map(|m| (m.id.clone(), m.thinking))
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
 }
 
 /// 回收站列表重注入（侧栏按钮计数与浮层同源）。

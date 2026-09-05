@@ -58,6 +58,7 @@ component ModelOption inherits Rectangle {
 export component InputArea inherits Rectangle {
     in property <bool> generating; // 当前会话是否正在生成（决定发送键=停止键）
     in property <bool> thinking-on;
+    in property <bool> thinking-capable: true; // 当前模型支持思考；false 置灰且发送强制关
     in property <[ModelItem]> models; // 模型下拉数据源（Rust 侧合并 config 别名 ∪ 远端 /models）
     in property <string> model-label; // 模型按钮文案（当前激活模型显示名）
     callback send-submit(string);
@@ -176,15 +177,17 @@ export component InputArea inherits Rectangle {
             }
         }
 
-        // Thinking 开关：默认开；开启态蓝色强调
+        // Thinking 开关：默认开；开启态蓝色强调；当前模型声明不支持 → 置灰 + ✕ 标记
         Rectangle {
             width: th-lbl.preferred-width + 20px;
             height: 28px;
             border-radius: 8px;
             border-width: 1px;
-            border-color: root.thinking-on ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
-            background: root.thinking-on ? Theme.p.accentSoftBg
+            border-color: root.thinking-on && root.thinking-capable
+                ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
+            background: root.thinking-on && root.thinking-capable ? Theme.p.accentSoftBg
                 : (th-ta.has-hover ? Theme.p.listHover : transparent);
+            opacity: root.thinking-capable ? 1 : 0.45;
             th-ta := TouchArea {
                 width: parent.width;
                 height: parent.height;
@@ -194,8 +197,10 @@ export component InputArea inherits Rectangle {
             th-lbl := Text {
                 x: 10px;
                 y: (parent.height - self.height) / 2;
-                text: root.thinking-on ? "● Thinking" : "○ Thinking";
-                color: root.thinking-on ? Theme.p.link : Theme.p.textSecondary;
+                text: !root.thinking-capable ? "Thinking ✕"
+                    : (root.thinking-on ? "● Thinking" : "○ Thinking");
+                color: root.thinking-on && root.thinking-capable
+                    ? Theme.p.link : Theme.p.textSecondary;
                 font-size: 13px;
             }
         }
