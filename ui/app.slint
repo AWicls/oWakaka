@@ -10,10 +10,10 @@ import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
 import { InputArea, ModelItem } from "input.slint";
-import { SettingsPage, ProvRow, ModelRow, RemoteRow } from "settings.slint";
+import { SettingsPage, ProvRow, ModelRow, RemoteRow, AstRow } from "settings.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct
-export { ChatMessage, SessionItem, ModelItem, ProvRow, ModelRow, RemoteRow }
+export { ChatMessage, SessionItem, ModelItem, ProvRow, ModelRow, RemoteRow, AstRow }
 
 /// 回收站一行（逻辑删除的会话）
 export struct TrashItem {
@@ -259,10 +259,32 @@ export component AppWindow inherits Window {
     callback prov-restored();
     callback prov-purged();
     callback prov-tested();
+    // —— AI 助手页状态（多助手 CRUD；Rust 注入/回注，「完成」写回） ——
+    in property <[AstRow]> asts;
+    in-out property <string> ast-sel;
+    in-out property <string> ast-name;
+    in-out property <string> ast-prompt;
+    in-out property <string> ast-temp;
+    in-out property <string> ast-opening;
+    in-out property <string> ast-model;
+    in property <string> ast-avatar;
+    in property <image> ast-avatar-img;
+    in property <color> ast-avatar-color;
+    in property <string> ast-initial;
+    in property <bool> sel-ast-default;
+    in property <bool> sel-ast-deleted;
+    in property <string> ast-status;
+    callback ast-created();
+    callback ast-selected(string);
+    callback ast-saved();
+    callback ast-deleted();
+    callback ast-restored();
+    callback ast-purged();
+    callback ast-defaulted();
+    callback ast-avatar-picked();
+    callback ast-avatar-cleared();
     // persona 初值：Rust 打开设置页时从 DB 读取注入
-    in property <string> cfg-system-prompt; // 角色设定：助手 system prompt（persona 表）
     in property <string> cfg-user-persona; // 角色设定：用户人设（persona 表）
-    in property <string> cfg-temperature; // 角色设定：温度（空串 = 未设定）
     in property <string> cfg-status; // 保存结果回显（错误/成功文案）
     callback send(string);
     callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
@@ -278,7 +300,7 @@ export component AppWindow inherits Window {
     callback model-picked(string); // 选择模型（Rust 切换激活 + 回写设置 kv）
     callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
     callback settings-requested(); // 进入设置整页（Rust 读配置注入初值 + settings-page 置 true）
-    callback settings-saved(string, string, string); // 助手提示词/用户人设/温度（persona 两页保存；提供商页即时落盘）
+    callback settings-saved(string); // 用户人设（persona user 页保存；提供商/助手页卡内保存）
     callback settings-back(); // 返回对话（放弃未保存编辑）
     // —— 标题栏窗控桥（Rust ui/frame.rs 实现拖窗/最小化等原生动作） ——
     callback win-minimize();
@@ -514,11 +536,33 @@ export component AppWindow inherits Window {
         prov-restored => { root.prov-restored(); }
         prov-purged => { root.prov-purged(); }
         prov-tested => { root.prov-tested(); }
-        init-system-prompt: root.cfg-system-prompt;
+        asts: root.asts;
+        ast-sel <=> root.ast-sel;
+        ast-name <=> root.ast-name;
+        ast-prompt <=> root.ast-prompt;
+        ast-temp <=> root.ast-temp;
+        ast-opening <=> root.ast-opening;
+        ast-model <=> root.ast-model;
+        ast-avatar: root.ast-avatar;
+        ast-avatar-img: root.ast-avatar-img;
+        ast-avatar-color: root.ast-avatar-color;
+        ast-initial: root.ast-initial;
+        sel-ast-default: root.sel-ast-default;
+        sel-ast-deleted: root.sel-ast-deleted;
+        ast-status: root.ast-status;
+        ast-models: root.models;
+        ast-created => { root.ast-created(); }
+        ast-selected(id) => { root.ast-selected(id); }
+        ast-saved => { root.ast-saved(); }
+        ast-deleted => { root.ast-deleted(); }
+        ast-restored => { root.ast-restored(); }
+        ast-purged => { root.ast-purged(); }
+        ast-defaulted => { root.ast-defaulted(); }
+        ast-avatar-picked => { root.ast-avatar-picked(); }
+        ast-avatar-cleared => { root.ast-avatar-cleared(); }
         init-user-persona: root.cfg-user-persona;
-        init-temperature: root.cfg-temperature;
         status: root.cfg-status;
-        saved(sys, persona, temp) => { root.settings-saved(sys, persona, temp); }
+        saved(persona) => { root.settings-saved(persona); }
         back => { root.settings-back(); }
     }
 

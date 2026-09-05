@@ -4,6 +4,7 @@
 
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme, Icon } from "theme.slint";
+import { ModelItem } from "input.slint";
 
 /// 标签 + 单行输入框（空值时显示灰色提示）
 component FieldRow inherits Rectangle {
@@ -118,11 +119,12 @@ component PromptRow inherits Rectangle {
     }
 }
 
-/// 提供商列表项（列表竖栏）：主行名称、副行状态；编辑中底色、使用中绿点、删除灰显
+/// 提供商/助手列表项（列表竖栏）：主行名称、副行状态；编辑中底色、使用中强调、删除灰显
 component ProvItemRow inherits Rectangle {
     in property <string> name;
     in property <string> kind;
     in property <bool> active;
+    in property <string> active-label: "● 使用中"; // active 时副行文案（助手页传「● 默认」）
     in property <bool> deleted;
     in property <bool> current;
     callback clicked();
@@ -147,7 +149,7 @@ component ProvItemRow inherits Rectangle {
             overflow: elide;
         }
         Text {
-            text: root.deleted ? "已删除" : (root.active ? "● 使用中" : root.kind);
+            text: root.deleted ? "已删除" : (root.active ? root.active-label : root.kind);
             color: root.active ? Theme.p.link : Theme.p.textMuted;
             font-size: 11px;
             overflow: elide;
@@ -257,6 +259,15 @@ export struct ProvRow {
     name: string,
     kind: string,       // 厂商标签（展示用）
     active: bool,       // 使用中
+    deleted: bool,      // 逻辑删除（灰显）
+}
+
+/// 助手清单项（AI 助手页列表竖栏数据，Rust 注入；复用 ProvItemRow 展示）
+export struct AstRow {
+    id: string,         // persona 行 id 字符串化
+    name: string,
+    sub: string,        // 副行：默认模型摘要（无则占位文案）
+    active: bool,       // 默认助手
     deleted: bool,      // 逻辑删除（灰显）
 }
 
@@ -463,12 +474,36 @@ export component SettingsPage inherits Rectangle {
     callback prov-purged();                 // 彻底删除（连带清密钥）
     callback prov-tested();                 // 测试连通（用表单当前值）
 
-    // —— persona 两页 + 界面页无需回写（主题走 Theme 全局） ——
-    in property <string> init-system-prompt; // 助手设定（persona assistant）
+    // —— AI 助手页（多助手；Rust 注入/回注，表单存页面级 ed 态，「完成」写回） ——
+    in property <[AstRow]> asts;
+    in-out property <string> ast-sel;       // 正在编辑的助手 id（空 = 无选中）
+    in-out property <string> ast-name;
+    in-out property <string> ast-prompt;    // 系统提示词（空 = 不注入）
+    in-out property <string> ast-temp;      // 温度（空 = 未设定）
+    in-out property <string> ast-opening;   // 开场白（空 = 建会话不插）
+    in-out property <string> ast-model;     // 默认模型 id（空 = 建会话不切模型）
+    in property <string> ast-avatar;        // 头像图片路径（空 = 圆底首字）
+    in property <image> ast-avatar-img;     // 已加载头像（空图 width=0）
+    in property <color> ast-avatar-color;   // 圆底色（Rust 按 id 哈希取色板）
+    in property <string> ast-initial;       // 名称首字（Slint string 无 substring，Rust 注入）
+    in property <bool> sel-ast-default;     // 当前选中 = 默认助手（不可删）
+    in property <bool> sel-ast-deleted;
+    in property <string> ast-status;
+    in property <[ModelItem]> ast-models;   // 默认模型弹层数据源（当前激活提供商模型）
+    callback ast-created();
+    callback ast-selected(string);
+    callback ast-saved();                   // 「完成」：表单写回选中助手
+    callback ast-deleted();
+    callback ast-restored();
+    callback ast-purged();
+    callback ast-defaulted();               // 设为默认助手
+    callback ast-avatar-picked();           // 弹系统文件对话框选图
+    callback ast-avatar-cleared();
+
+    // —— 用户设定页 + 界面页无需回写（主题走 Theme 全局） ——
     in property <string> init-user-persona; // 用户人设（persona user）
-    in property <string> init-temperature; // 温度（空 = 未设定）
     in property <string> status;
-    callback saved(string, string, string); // 助手提示词/用户人设/温度
+    callback saved(string);                 // 用户人设（助手字段已迁 AI 助手页）
     callback back();
 
     // 0 界面（默认）| 1 提供商 | 2 AI 助手 | 3 用户设定
@@ -477,11 +512,10 @@ export component SettingsPage inherits Rectangle {
     property <bool> remote-open: false;     // 远端模型清单弹层（拉取按钮开启，遮罩关闭）
     property <bool> custom-open: false;     // 自定义模型输入行（「自定义」按钮开合）
     property <string> mdl-edit: "";         // 正在编辑的模型行 id（同屏仅一行）
+    property <bool> ast-model-open: false;  // 默认模型选择弹层
 
-    // 编辑态（persona 字段跨页存续）：初值 = 注入的落盘配置
-    in-out property <string> ed-system: root.init-system-prompt;
+    // 编辑态（用户人设跨页存续）：初值 = 注入的落盘配置
     in-out property <string> ed-persona: root.init-user-persona;
-    in-out property <string> ed-temp: root.init-temperature;
 
     background: Theme.p.windowBg;
     clip: true;
@@ -907,8 +941,226 @@ export component SettingsPage inherits Rectangle {
                 }
             }
 
+            // —— AI 助手页：列表卡 + 详情卡（Rust 为真相源，「完成」写回） ——
+            if root.page == 2 : HorizontalLayout {
+                spacing: 10px;
+                // if-block 子元素不自动占位：无此行则不随窗口撑满
+                horizontal-stretch: 1;
+
+                Rectangle {
+                    width: Math.max(120px, Math.min(180px, root.width * 0.17));
+                    background: Theme.p.panelBg;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.p.panelBorder;
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 4px;
+                        Pill {
+                            label: "＋ 新增";
+                            picked => { root.ast-created(); }
+                        }
+                        for a in root.asts : ProvItemRow {
+                            name: a.name;
+                            kind: a.sub;
+                            active: a.active;
+                            active-label: "● 默认";
+                            deleted: a.deleted;
+                            current: a.id == root.ast-sel;
+                            clicked => {
+                                root.ast-selected(a.id);
+                                root.ast-model-open = false;
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.p.panelBg;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.p.panelBorder;
+                    clip: true;
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+
+                        ScrollView {
+                            vertical-stretch: 1;
+                            viewport-width: self.visible-width;
+                            horizontal-scrollbar-policy: always-off;
+                            vertical-scrollbar-policy: always-on;
+                            VerticalLayout {
+                                spacing: 10px;
+
+                                Text {
+                                    text: root.ast-sel == "" ? "AI 助手"
+                                        : (root.sel-ast-deleted ? "已删除的助手" : "编辑助手");
+                                    color: Theme.p.textPrimary;
+                                    font-size: 14px;
+                                }
+
+                                if root.ast-sel == "" : Text {
+                                    text: "没有选中的助手：点左上「＋ 新增」创建。";
+                                    color: Theme.p.textMuted;
+                                    font-size: 13px;
+                                    wrap: word-wrap;
+                                }
+
+                                // 头像行：圆形预览（有图盖图，无图圆底+首字）+ 选图/清除
+                                if root.ast-sel != "" : HorizontalLayout {
+                                    spacing: 10px;
+                                    height: 52px;
+                                    Rectangle {
+                                        width: 48px;
+                                        height: 48px;
+                                        border-radius: 24px;
+                                        clip: true;
+                                        background: root.ast-avatar-color;
+                                        if root.ast-avatar-img.width > 0 : Image {
+                                            width: 48px;
+                                            height: 48px;
+                                            source: root.ast-avatar-img;
+                                            image-fit: cover;
+                                        }
+                                        if root.ast-avatar-img.width == 0 : Text {
+                                            width: 48px;
+                                            height: 48px;
+                                            text: root.ast-initial;
+                                            color: white;
+                                            font-size: 20px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        vertical-stretch: 0;
+                                        spacing: 4px;
+                                        Text {
+                                            text: "头像（无图 = 圆底 + 名称首字）";
+                                            color: Theme.p.textMuted;
+                                            font-size: 12px;
+                                        }
+                                        HorizontalLayout {
+                                            spacing: 6px;
+                                            height: 26px;
+                                            Pill {
+                                                width: 76px;
+                                                label: "选图片…";
+                                                picked => { root.ast-avatar-picked(); }
+                                            }
+                                            if root.ast-avatar != "" : Pill {
+                                                width: 48px;
+                                                label: "清除";
+                                                picked => { root.ast-avatar-cleared(); }
+                                            }
+                                            if root.ast-avatar != "" : Text {
+                                                horizontal-stretch: 1;
+                                                text: root.ast-avatar;
+                                                color: Theme.p.textMuted;
+                                                font-size: 11px;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+                                            if root.ast-avatar == "" : Rectangle { horizontal-stretch: 1; }
+                                        }
+                                    }
+                                }
+
+                                if root.ast-sel != "" : FieldRow {
+                                    label: "名称";
+                                    text <=> root.ast-name;
+                                    hint: "例如：翻译助手";
+                                }
+                                if root.ast-sel != "" : PromptRow {
+                                    label: "系统提示词（每次发送前置注入，留空 = 不发）";
+                                    text <=> root.ast-prompt;
+                                    hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
+                                }
+                                if root.ast-sel != "" : FieldRow {
+                                    label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
+                                    text <=> root.ast-temp;
+                                    hint: "0.7";
+                                }
+                                if root.ast-sel != "" : PromptRow {
+                                    label: "开场白（用该助手新建会话时作为第一条助手消息，留空 = 不插）";
+                                    text <=> root.ast-opening;
+                                    hint: "例如：你好，我是你的翻译助手，发文本即译";
+                                }
+                                if root.ast-sel != "" : VerticalLayout {
+                                    vertical-stretch: 0;
+                                    spacing: 3px;
+                                    Text {
+                                        text: "默认模型（新建会话时自动切模型下拉；不指定 = 保持当前选择）";
+                                        color: Theme.p.textMuted;
+                                        font-size: 12px;
+                                        wrap: word-wrap;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        height: 30px;
+                                        Pill {
+                                            width: 180px;
+                                            label: root.ast-model == "" ? "不指定" : root.ast-model;
+                                            picked => { root.ast-model-open = true; }
+                                        }
+                                        if root.ast-status != "" : Text {
+                                            horizontal-stretch: 1;
+                                            text: root.ast-status;
+                                            color: Theme.p.link;
+                                            font-size: 12px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
+                                        if root.ast-status == "" : Rectangle { horizontal-stretch: 1; }
+                                    }
+                                }
+                                // 尾部惰性 filler：定高内容上靠，高窗富余不被摊开
+                                Rectangle { vertical-stretch: 1; }
+                            }
+                        }
+
+                        // 底栏（不随主体滚动）：删除类恒左，「设为默认」「完成」靠右
+                        if root.ast-sel != "" : HorizontalLayout {
+                            spacing: 8px;
+                            height: 30px;
+                            if root.sel-ast-deleted : Pill {
+                                width: 72px;
+                                label: "彻底删除";
+                                picked => { root.ast-purged(); }
+                            }
+                            if !root.sel-ast-deleted && !root.sel-ast-default : Pill {
+                                width: 72px;
+                                label: "删除";
+                                picked => { root.ast-deleted(); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            if root.sel-ast-deleted : Pill {
+                                width: 72px;
+                                label: "恢复";
+                                picked => { root.ast-restored(); }
+                            }
+                            if !root.sel-ast-deleted && !root.sel-ast-default : Pill {
+                                width: 96px;
+                                label: "设为默认";
+                                picked => { root.ast-defaulted(); }
+                            }
+                            if !root.sel-ast-deleted : Pill {
+                                width: 72px;
+                                label: "完成";
+                                primary: true;
+                                picked => { root.ast-saved(); }
+                            }
+                        }
+                    }
+                }
+            }
+
             // —— 其余分区：单内容卡 ——
-            if root.page != 1 : Rectangle {
+            if root.page == 0 || root.page == 3 : Rectangle {
                 horizontal-stretch: 1;
                 background: Theme.p.panelBg;
                 border-radius: 14px;
@@ -920,8 +1172,7 @@ export component SettingsPage inherits Rectangle {
                     spacing: 10px;
 
                     Text {
-                        text: root.page == 0 ? "界面"
-                            : root.page == 2 ? "AI 助手设定" : "用户设定";
+                        text: root.page == 0 ? "界面" : "用户设定";
                         color: Theme.p.textPrimary;
                         font-size: 14px;
                     }
@@ -966,21 +1217,6 @@ export component SettingsPage inherits Rectangle {
                         Rectangle { vertical-stretch: 1; }
                     }
 
-                    if root.page == 2 : VerticalLayout {
-                        spacing: 10px;
-                        PromptRow {
-                            label: "助手设定（system prompt：每次发送前置注入，留空 = 不发）";
-                            text <=> root.ed-system;
-                            hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
-                        }
-                        FieldRow {
-                            label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
-                            text <=> root.ed-temp;
-                            hint: "0.7";
-                        }
-                        Rectangle { vertical-stretch: 1; }
-                    }
-
                     if root.page == 3 : VerticalLayout {
                         spacing: 10px;
                         PromptRow {
@@ -1002,8 +1238,8 @@ export component SettingsPage inherits Rectangle {
             wrap: word-wrap;
         }
 
-        // 全局「保存」只服务 persona 两页；提供商页在详情卡内即时保存
-        if root.page == 2 || root.page == 3 : HorizontalLayout {
+        // 全局「保存」只服务用户设定页；提供商/AI 助手页在详情卡内保存
+        if root.page == 3 : HorizontalLayout {
             spacing: 8px;
             height: 30px;
             Rectangle { horizontal-stretch: 1; }
@@ -1012,7 +1248,7 @@ export component SettingsPage inherits Rectangle {
                 label: "保存";
                 primary: true;
                 picked => {
-                    root.saved(root.ed-system, root.ed-persona, root.ed-temp);
+                    root.saved(root.ed-persona);
                 }
             }
         }
@@ -1102,6 +1338,86 @@ export component SettingsPage inherits Rectangle {
                                 picked => {
                                     if !r.added { root.prov-model-added(r.id); }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // —— 默认模型选择弹层：居中自适应（数据源 = 当前激活提供商模型清单，含「不指定」） ——
+    if root.ast-model-open : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        TouchArea {
+            clicked => { root.ast-model-open = false; }
+        }
+    }
+    if root.ast-model-open : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: Math.min(320px, root.width - 60px);
+        height: Math.min(360px, root.height - 60px);
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.p.inputBorder;
+        background: Theme.p.panelBg;
+        clip: true;
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            HorizontalLayout {
+                height: 24px;
+                spacing: 8px;
+                Text {
+                    text: "默认模型";
+                    color: Theme.p.textPrimary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Pill {
+                    width: 56px;
+                    label: "关闭";
+                    picked => { root.ast-model-open = false; }
+                }
+            }
+            if root.ast-models.length == 0 : Text {
+                text: "当前提供商还没有登记模型：先去提供商页添加。";
+                color: Theme.p.textMuted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.p.inputBorder;
+                background: Theme.p.windowBg;
+                clip: true;
+                ScrollView {
+                    width: parent.width;
+                    height: parent.height;
+                    viewport-width: self.visible-width;
+                    vertical-scrollbar-policy: always-on;
+                    VerticalLayout {
+                        padding: 4px;
+                        spacing: 2px;
+                        MenuOpt {
+                            label: "不指定";
+                            picked => {
+                                root.ast-model = "";
+                                root.ast-model-open = false;
+                            }
+                        }
+                        for m in root.ast-models : MenuOpt {
+                            label: m.display;
+                            picked => {
+                                root.ast-model = m.id;
+                                root.ast-model-open = false;
                             }
                         }
                     }

@@ -19,6 +19,7 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 slint = { version = "1", features = ["unstable-winit-030"] }
 # Slint 无剪贴板 API，复制按钮经系统剪贴板落地（Windows 原生实现）
 arboard = "3"
+rfd = "0.17.2"
 
 [build-dependencies]
 slint-build = "1"
