@@ -14,6 +14,39 @@ import { SettingsPage, ProvRow, ModelRow, RemoteRow } from "settings.slint";
 // 再导出供 Rust（include_modules）消费的 struct
 export { ChatMessage, SessionItem, ModelItem, ProvRow, ModelRow, RemoteRow }
 
+/// 回收站一行（逻辑删除的会话）
+export struct TrashItem {
+    id: int,
+    title: string,
+}
+
+/// 回收站浮层里的小文字按钮
+component TinyBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback picked();
+
+    width: t.preferred-width + 14px;
+    height: 22px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.p.inputBorder;
+    background: ta.has-hover ? Theme.p.listHover : transparent;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    t := Text {
+        x: 7px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.danger ? #e57373 : Theme.p.link;
+        font-size: 12px;
+    }
+}
+
 export component AppWindow inherits Window {
     title: "oWakaka";
     background: Theme.p.windowBg;
@@ -29,6 +62,9 @@ export component AppWindow inherits Window {
     in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
     in property <string> model-label; // 当前激活模型显示名
     in property <bool> settings-page; // 设置整页开关（true = 显示设置页，主三框整体切换）
+    // —— 回收站（会话两级删除的找回入口） ——
+    in property <bool> trash-open;
+    in property <[TrashItem]> trash-list;
     // 主题持久化桥：Rust 经此属性读写（kv "ui"），双向链到 Theme 全局；
     // 侧栏菜单/设置页仍直接改 Theme.mode，即时生效同一条链
     in-out property <int> ui-theme <=> Theme.mode;
@@ -75,6 +111,11 @@ export component AppWindow inherits Window {
     callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
     callback new-session();
     callback select-session(int);
+    callback session-delete(int); // 侧栏行 ✕ → 逻辑删除
+    callback trash-requested();   // 打开回收站浮层
+    callback trash-closed();
+    callback trash-restore(int);  // 会话 id（rowid < 2^31，i32 足够）
+    callback trash-purge(int);
     callback stop(); // 停止当前可见会话的生成
     callback toggle-thinking();
     callback model-picked(string); // 选择模型（Rust 切换激活 + 回写设置 kv）
@@ -96,8 +137,11 @@ export component AppWindow inherits Window {
         SessionSidebar {
             width: vsplit.position;
             sessions: root.sessions;
+            trash-count: root.trash-list.length;
             new-clicked => { root.new-session(); }
             row-clicked(i) => { root.select-session(i); }
+            session-delete(i) => { root.session-delete(i); }
+            trash-clicked => { root.trash-requested(); }
             settings-clicked => { root.settings-requested(); }
         }
         vsplit := VSplitter {
@@ -175,6 +219,91 @@ export component AppWindow inherits Window {
                 thinking-toggled => { root.toggle-thinking(); }
                 model-picked(id) => { root.model-picked(id); }
                 models-requested => { root.models-requested(); }
+            }
+        }
+    }
+
+    // —— 回收站浮层：遮罩 + 居中卡（恢复 / 彻底删除） ——
+    if root.trash-open : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: rgba(0, 0, 0, 0.45);
+        TouchArea {
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.trash-closed(); }
+        }
+    }
+    if root.trash-open : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 400px;
+        height: Math.min(420px, root.height - 40px);
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.p.panelBorder;
+        background: Theme.p.panelBg;
+        clip: true;
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            HorizontalLayout {
+                height: 24px;
+                spacing: 8px;
+                Text {
+                    text: "回收站";
+                    color: Theme.p.textPrimary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                TinyBtn {
+                    label: "关闭";
+                    picked => { root.trash-closed(); }
+                }
+            }
+            if root.trash-list.length == 0 : Text {
+                text: "没有已删除的会话。侧栏条目悬停点 ✕ 删除的会话会先进这里。";
+                color: Theme.p.textMuted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                VerticalLayout {
+                    spacing: 4px;
+                    for t in root.trash-list : HorizontalLayout {
+                        height: 28px;
+                        spacing: 8px;
+                        Text {
+                            text: t.title;
+                            horizontal-stretch: 1;
+                            color: Theme.p.textSecondary;
+                            font-size: 13px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        TinyBtn {
+                            label: "恢复";
+                            picked => { root.trash-restore(t.id); }
+                        }
+                        TinyBtn {
+                            label: "彻底删除";
+                            danger: true;
+                            picked => { root.trash-purge(t.id); }
+                        }
+                    }
+                }
+            }
+            Text {
+                text: "恢复 = 放回侧栏末尾；彻底删除连同全部消息物理清除，不可找回。";
+                color: Theme.p.textMuted;
+                font-size: 11px;
+                wrap: word-wrap;
             }
         }
     }

@@ -10,18 +10,26 @@ export struct SessionItem {
     active: bool,
 }
 
-/// 侧栏列表的一行：圆角条，选中/悬停高亮，超长标题省略号。
+/// 侧栏列表的一行：圆角条，选中/悬停高亮，超长标题省略号；悬停右侧现 ✕ 删除。
 component SessionRow inherits Rectangle {
     in property <string> title;
     in property <bool> active;
     callback row-clicked();
+    callback delete-clicked();
 
     height: 38px;
     ta := TouchArea {
         width: parent.width;
         height: parent.height;
         mouse-cursor: pointer;
-        clicked => { root.row-clicked(); }
+        clicked => {
+            // 悬停 ✕ 无独立 TouchArea（嵌套事件归属不可靠），按坐标分区：右缘 26px = 删除
+            if (ta.mouse-x >= parent.width - 26px) {
+                root.delete-clicked();
+            } else {
+                root.row-clicked();
+            }
+        }
     }
     Rectangle {
         x: 2px;
@@ -33,11 +41,21 @@ component SessionRow inherits Rectangle {
         Text {
             x: 10px;
             y: (parent.height - self.height) / 2;
-            width: parent.width - 20px;
+            width: parent.width - 40px;
             text: root.title;
             color: root.active ? Theme.p.textPrimary : Theme.p.textSecondary;
             font-size: 13px;
             overflow: elide;
+        }
+        Text {
+            visible: ta.has-hover;
+            width: 20px;
+            y: (parent.height - self.height) / 2;
+            x: parent.width - 26px;
+            text: "✕";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            horizontal-alignment: center;
         }
     }
 }
@@ -93,8 +111,11 @@ component ThemeOption inherits Rectangle {
 /// 左侧会话栏卡片：顶部「开始新对话」，中部会话列表可滚动，底部主题/设置按钮行。
 export component SessionSidebar inherits Rectangle {
     in property <[SessionItem]> sessions;
+    in property <int> trash-count; // 回收站条目数（>0 时按钮高亮）
     callback new-clicked();
     callback row-clicked(int);
+    callback session-delete(int); // 行 ✕：逻辑删除 → 回收站
+    callback trash-clicked(); // 打开回收站浮层
     callback settings-clicked(); // 进入程序内设置整页
 
     background: Theme.p.panelBg;
@@ -139,6 +160,7 @@ export component SessionSidebar inherits Rectangle {
                     title: s.title;
                     active: s.active;
                     row-clicked => { root.row-clicked(index); }
+                    delete-clicked => { root.session-delete(index); }
                 }
             }
         }
@@ -186,6 +208,27 @@ export component SessionSidebar inherits Rectangle {
                     height: 16px;
                     which: 5; // 设置滑杆
                     ink: Theme.p.textSecondary;
+                }
+            }
+            // 回收站入口（有删剩会话时显示计数并高亮）
+            Rectangle {
+                width: trash-lbl.preferred-width + 16px;
+                height: 34px;
+                border-radius: 8px;
+                background: ttb.has-hover ? Theme.p.listHover
+                        : (root.trash-count > 0 ? Theme.p.accentSoftBg : transparent);
+                ttb := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    mouse-cursor: pointer;
+                    clicked => { root.trash-clicked(); }
+                }
+                trash-lbl := Text {
+                    x: 8px;
+                    y: (parent.height - self.height) / 2;
+                    text: root.trash-count > 0 ? "回收站 " + root.trash-count : "回收站";
+                    color: root.trash-count > 0 ? Theme.p.link : Theme.p.textMuted;
+                    font-size: 12px;
                 }
             }
             Rectangle { } // 左对齐，余量吃掉在右

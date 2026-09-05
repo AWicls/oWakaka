@@ -14,7 +14,7 @@ use std::{
 use slint::{Model, SharedString, VecModel};
 
 use crate::ai::client::{TurnEvent, TurnHandle};
-use crate::db::{Db, LoadedMessage, MessagePayload};
+use crate::db::{Db, LoadedMessage, LoadedSession, MessagePayload};
 
 use super::{AppWindow, ChatMessage, SessionItem};
 
@@ -170,6 +170,71 @@ impl Host {
         self.current.set(self.models.borrow().len() - 1);
         window.set_messages(model.into());
         window.set_generating(false);
+    }
+
+    /// 删除可见会话（逻辑删 → 回收站）：取消其在途生成、整体 bump 删除点及之后的
+    /// 轮次代次使旧事件作废（下方标量前移一位，事件若继续按旧 sid 写入会串会话）。
+    /// 删空则补建一个「新对话」，侧栏恒 ≥1。
+    pub(super) fn delete_session(&self, idx: usize, window: &AppWindow) {
+        let len = self.models.borrow().len();
+        if idx >= len {
+            return;
+        }
+        if let Some(handle) = self.runs.borrow_mut()[idx].cancel.take() {
+            handle.cancel();
+        }
+        {
+            let mut runs = self.runs.borrow_mut();
+            for run in runs.iter_mut().skip(idx) {
+                run.gen_id += 1;
+            }
+        }
+        if let Some(&db_id) = self.db_ids.borrow().get(idx)
+            && db_id >= 0
+            && let Err(e) = self.db.soft_delete_session(db_id)
+        {
+            eprintln!("会话删除落库失败: {e}");
+        }
+        self.items.remove(idx);
+        self.models.borrow_mut().remove(idx);
+        self.runs.borrow_mut().remove(idx);
+        self.db_ids.borrow_mut().remove(idx);
+        if self.items.row_count() == 0 {
+            let id = self.create_session_row(NEW_TITLE);
+            self.adopt(id, NEW_TITLE, Vec::new());
+            self.current.set(0);
+        } else {
+            let cur = self.current.get();
+            let next = if idx < cur {
+                cur - 1
+            } else if idx == cur {
+                cur.min(self.items.row_count() - 1)
+            } else {
+                cur
+            };
+            self.current.set(next);
+            for i in 0..self.items.row_count() {
+                if let Some(row) = self.items.row_data(i)
+                    && row.active != (i == next)
+                {
+                    self.items.set_row_data(
+                        i,
+                        SessionItem {
+                            active: i == next,
+                            ..row
+                        },
+                    );
+                }
+            }
+        }
+        window.set_messages(self.active_model().into());
+        window.set_generating(self.is_generating());
+    }
+
+    /// 回收站恢复后把会话（含消息）推入侧栏末尾；不改变当前可见。
+    pub(super) fn push_restored(&self, s: LoadedSession) {
+        let bubbles = s.messages.into_iter().map(bubble_from).collect();
+        self.adopt(s.id, &s.title, bubbles);
     }
 
     /// 切换可见会话；越界或与当前相同则不动作。

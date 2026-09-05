@@ -412,32 +412,63 @@ impl Db {
         };
         let mut sessions = Vec::with_capacity(heads.len());
         for (id, title) in heads {
-            let mut stmt = self.conn.prepare(
-                "SELECT role, content, model, payload FROM message
-                 WHERE session_id = ?1 ORDER BY seq",
-            )?;
-            let messages = stmt
-                .query_map([id], |r| {
-                    let raw: Option<String> = r.get(3)?;
-                    // 坏 payload 回退缺省值：读历史永不炸
-                    let payload = raw
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default();
-                    Ok(LoadedMessage {
-                        role: r.get(0)?,
-                        content: r.get(1)?,
-                        model: r.get(2)?,
-                        payload,
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
             sessions.push(LoadedSession {
                 id,
                 title,
-                messages,
+                messages: self.messages_of(id)?,
             });
         }
         Ok(sessions)
+    }
+
+    /// 单会话消息按 seq 升序。
+    fn messages_of(&self, session_id: i64) -> Result<Vec<LoadedMessage>, Box<dyn Error>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT role, content, model, payload FROM message WHERE session_id = ?1 ORDER BY seq",
+        )?;
+        stmt.query_map([session_id], |r| {
+            let raw: Option<String> = r.get(3)?;
+            // 坏 payload 回退缺省值：读历史永不炸
+            let payload = raw
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            Ok(LoadedMessage {
+                role: r.get(0)?,
+                content: r.get(1)?,
+                model: r.get(2)?,
+                payload,
+            })
+        })?
+        .collect::<Result<_, _>>()
+        .map_err(Into::into)
+    }
+
+    /// 回收站列表：已逻辑删除的会话 (id, title)，按 id 升序。
+    pub fn list_deleted(&self) -> Result<Vec<(i64, String)>, Box<dyn Error>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, title FROM session WHERE deleted_at IS NOT NULL ORDER BY id")?;
+        Ok(stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?)
+    }
+
+    /// 装载单个会话（含消息）；不存在回 `None`。回收站恢复推入侧栏用。
+    pub fn load_session(&self, id: i64) -> Result<Option<LoadedSession>, Box<dyn Error>> {
+        let Some(title) = self
+            .conn
+            .query_row("SELECT title FROM session WHERE id = ?1", [id], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(LoadedSession {
+            id,
+            title,
+            messages: self.messages_of(id)?,
+        }))
     }
 
     /// 逻辑删除会话：置 `deleted_at`，随时可 [`restore_session`](Self::restore_session) 找回。
@@ -546,6 +577,27 @@ mod tests {
         assert_eq!(upgraded.load_all()?[0].title, "keep");
         upgraded.soft_delete_session(sid)?;
         assert!(upgraded.load_all()?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn list_deleted_and_load_session_for_trash() -> Result<(), Box<dyn Error>> {
+        let db = Db::open_in_memory()?;
+        let keep = db.insert_session("留")?;
+        let gone = db.insert_session("删")?;
+        db.insert_message(gone, "user", "hi", "", None)?;
+        assert!(db.list_deleted()?.is_empty());
+
+        db.soft_delete_session(gone)?;
+        assert_eq!(db.list_deleted()?, vec![(gone, "删".to_string())]);
+        // 未删的 load_session 也可读（供恢复推入）；已删同样能读出（恢复语义）
+        let s = db.load_session(gone)?.unwrap();
+        assert_eq!((s.id, s.messages.len()), (gone, 1));
+        assert_eq!(db.load_session(keep)?.unwrap().messages.len(), 0);
+        assert!(db.load_session(999)?.is_none());
+
+        db.purge_session(gone)?;
+        assert!(db.list_deleted()?.is_empty());
         Ok(())
     }
 

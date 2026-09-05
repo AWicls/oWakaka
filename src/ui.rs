@@ -436,13 +436,12 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.set_thinking_on(host.thinking_on.get());
 
     // 主题恢复：kv("ui") {"theme":0|1|2} → 双向链进 Theme 全局
-    if let Ok(Some(json)) = db.kv_get("ui") {
-        if let Some(v) = serde_json::from_str::<serde_json::Value>(&json)
+    if let Ok(Some(json)) = db.kv_get("ui")
+        && let Some(v) = serde_json::from_str::<serde_json::Value>(&json)
             .ok()
             .and_then(|j| j.get("theme").and_then(serde_json::Value::as_i64))
-        {
-            window.set_ui_theme(v as i32);
-        }
+    {
+        window.set_ui_theme(v as i32);
     }
     {
         let db = db.clone();
@@ -452,6 +451,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             }
         });
     }
+    refresh_trash(&db, &window);
 
     let models = ModelsState::from_config(db.clone());
     models.apply(&window);
@@ -478,6 +478,67 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 if let Some(w) = window_weak.upgrade() {
                     host.select(i.max(0) as usize, &w);
                 }
+            }
+        });
+        let window_weak = window.as_weak();
+        window.on_session_delete({
+            let host = host.clone();
+            let db = db.clone();
+            move |i| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                host.delete_session(i.max(0) as usize, &w);
+                refresh_trash(&db, &w);
+            }
+        });
+        let window_weak = window.as_weak();
+        window.on_trash_requested({
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                refresh_trash(&db, &w);
+                w.set_trash_open(true);
+            }
+        });
+        let window_weak = window.as_weak();
+        window.on_trash_closed(move || {
+            if let Some(w) = window_weak.upgrade() {
+                w.set_trash_open(false);
+            }
+        });
+        let window_weak = window.as_weak();
+        window.on_trash_restore({
+            let host = host.clone();
+            let db = db.clone();
+            move |id| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let sid = id as i64;
+                match db.restore_session(sid).and_then(|()| db.load_session(sid)) {
+                    Ok(Some(s)) => {
+                        host.push_restored(s);
+                        refresh_trash(&db, &w);
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("恢复会话失败: {e}"),
+                }
+            }
+        });
+        let window_weak = window.as_weak();
+        window.on_trash_purge({
+            let db = db.clone();
+            move |id| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                if let Err(e) = db.purge_session(id as i64) {
+                    eprintln!("彻底删除失败: {e}");
+                }
+                refresh_trash(&db, &w);
             }
         });
     }
@@ -1019,6 +1080,20 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.show()?;
     slint::run_event_loop()?;
     Ok(())
+}
+
+/// 回收站列表重注入（侧栏按钮计数与浮层同源）。
+fn refresh_trash(db: &Db, window: &AppWindow) {
+    let rows: Vec<TrashItem> = db
+        .list_deleted()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, title)| TrashItem {
+            id: id as i32,
+            title: title.into(),
+        })
+        .collect();
+    window.set_trash_list(Rc::new(VecModel::from(rows)).into());
 }
 
 /// 每次发送现读 DB 活跃角色行组装轮次人设（毫秒级，读失败按无角色处理不阻断发送）。
