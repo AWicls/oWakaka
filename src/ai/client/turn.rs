@@ -115,8 +115,8 @@ fn build_request(
 }
 
 /// Thinking 开关 → 请求扩展字段（经 `Request.extra` 平铺透传）。
-/// 目前两端点族同用 OpenAI `reasoning.effort` 语义；后续定制厂家字段时，
-/// 在本函数按 [`Api`] 族分叉即可。
+/// 目前两端点族同用 OpenAI `reasoning.effort` 语义；厂家差异字段
+/// （如 MiMo 的思考开启档位）由 `provider::Customization::decorate_body` 在发送前定制。
 fn thinking_extra(api: Api, on: bool) -> Option<serde_json::Value> {
     if on {
         return None;

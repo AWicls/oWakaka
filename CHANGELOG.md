@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Added
+- 提供商定制接口落地（`ai::provider::Customization`，一家一个子模块实现）：
+  - 小米 MiMo 真实定制：鉴权改厂商首选 `api-key` 头（替代通用 Bearer）；请求体发送前剔除厂商不支持字段（`background`/`previous_response_id`/`context_management`）；思考开启时显式注入 `reasoning.effort="low"`（MiMo 各档等效），关闭沿用 `effort=none`
+  - 定制注入点覆盖 chat/responses 两端点族 × 流式/非流式全路径与 `GET /models`；通用（custom）路径零行为变化
+  - 测试：鉴权头/字段注入/不支持字段剔除 3 个离线单测
 - 定制提供商与配置规范化（顶级 `provider` 字段，缺省 `"custom"`）：
   - `provider = "xiaomi_mimo"`（小米 MiMo）：内置官方端点 `https://api.xiaomimimo.com/v1`（显式 `base_url` 可覆盖为专属网关），接口族锁死 Responses（显式配 chat 校验报错）；线格式复用通用 responses 实现，不另建客户端
   - `model` 字段语义升级为"当前激活模型"；新增 `[models]` 别名表（模型 ID → UI 显示名）可读写回存；老配置零改动照常可用

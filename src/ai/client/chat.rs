@@ -7,16 +7,23 @@ use crate::ai::{
 };
 
 impl Client {
-    /// 非流式对话：`POST {base_url}/chat/completions`，Bearer 鉴权，JSON 收发。
+    /// 非流式对话：`POST {base_url}/chat/completions`，鉴权经 [`Client::authed`]
+    /// （通用 Bearer / 定制提供商按厂家方式），JSON 收发前过 [`Client::decorated`] 定制钩子。
     ///
     /// 错误语义见 [`ChatError`]：先取响应体文本再解析，
     /// 保证非 2xx 与"2xx 但非合法 JSON"两种情况都带原始响应体，厂家信息不丢。
     pub async fn chat(&self, req: &Request) -> Result<Response, ChatError> {
+        let mut body = serde_json::to_value(req).map_err(|e| ChatError::Decode {
+            error: e.to_string(),
+            body: String::new(),
+        })?;
+        self.decorated(&mut body);
         let resp = self
-            .http
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(req)
+            .authed(
+                self.http
+                    .post(format!("{}/chat/completions", self.base_url)),
+            )
+            .json(&body)
             .send()
             .await?;
         let status = resp.status();
@@ -49,11 +56,13 @@ impl Client {
             body: String::new(),
         })?;
         body["stream"] = serde_json::Value::Bool(true);
+        self.decorated(&mut body);
 
         let resp = self
-            .http
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(&self.api_key)
+            .authed(
+                self.http
+                    .post(format!("{}/chat/completions", self.base_url)),
+            )
             .json(&body)
             .send()
             .await?;

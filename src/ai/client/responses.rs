@@ -20,11 +20,15 @@ impl Client {
     /// 正文提取用 [`Response::assistant_text`](RespResponse::assistant_text)，
     /// 思考摘要用 [`Response::reasoning_text`](RespResponse::reasoning_text)。
     pub async fn respond(&self, req: &Request) -> Result<RespResponse, ChatError> {
+        let mut body =
+            serde_json::to_value(to_resp_request(req)).map_err(|e| ChatError::Decode {
+                error: e.to_string(),
+                body: String::new(),
+            })?;
+        self.decorated(&mut body);
         let resp = self
-            .http
-            .post(format!("{}/responses", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&to_resp_request(req))
+            .authed(self.http.post(format!("{}/responses", self.base_url)))
+            .json(&body)
             .send()
             .await?;
         let status = resp.status();
@@ -56,11 +60,10 @@ impl Client {
                 body: String::new(),
             })?;
         body["stream"] = serde_json::Value::Bool(true);
+        self.decorated(&mut body);
 
         let resp = self
-            .http
-            .post(format!("{}/responses", self.base_url))
-            .bearer_auth(&self.api_key)
+            .authed(self.http.post(format!("{}/responses", self.base_url)))
             .json(&body)
             .send()
             .await?;

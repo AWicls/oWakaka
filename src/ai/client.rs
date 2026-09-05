@@ -56,6 +56,7 @@ use std::time::Duration;
 use crate::ai::{
     config::{Api, Config},
     dto::{models::ModelList, openai_chat::request::Request},
+    provider::Customization,
 };
 
 /// 对话请求的失败类型：区分"传输层问题"、"服务端业务错误"与"响应形状不符"。
@@ -137,9 +138,26 @@ pub struct Client {
     api: Api,
     /// 配置的流式开关，各端点族入口消费
     stream: bool,
+    /// 定制提供商实现（`None` = 通用路径：Bearer 鉴权 + 请求体原样发送）
+    custom: Option<&'static dyn Customization>,
 }
 
 impl Client {
+    /// 给请求挂鉴权：定制提供商按厂家首选方式，通用路径 `Authorization: Bearer`
+    pub(crate) fn authed(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.custom {
+            Some(c) => c.authenticate(rb, &self.api_key),
+            None => rb.bearer_auth(&self.api_key),
+        }
+    }
+
+    /// 发送前的请求体定制钩子：通用路径无操作，定制提供商注入/剔除厂家字段
+    pub(crate) fn decorated(&self, body: &mut serde_json::Value) {
+        if let Some(c) = self.custom {
+            c.decorate_body(self.api, body);
+        }
+    }
+
     /// 读默认凭据文件（`config.toml`）构建客户端：`Config::load` +
     /// [`validate`](crate::ai::config::Config::validate) +
     /// [`from_config`](Self::from_config) 一步到位，错误原样上抛供调用方呈现。
@@ -163,6 +181,7 @@ impl Client {
             model: cfg.model.clone(),
             api: cfg.effective_api(),
             stream: cfg.stream,
+            custom: cfg.provider.spec(),
         }
     }
 
@@ -188,9 +207,7 @@ impl Client {
     /// 由调用方降级为仅用配置清单。
     pub async fn list_models(&self) -> Result<Vec<String>, ChatError> {
         let resp = self
-            .http
-            .get(format!("{}/models", self.base_url))
-            .bearer_auth(&self.api_key)
+            .authed(self.http.get(format!("{}/models", self.base_url)))
             .send()
             .await?;
         let status = resp.status();
