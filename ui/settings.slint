@@ -81,15 +81,15 @@ component Pill inherits Rectangle {
     }
 }
 
-/// 标签 + 多行输入（角色提示词）：std TextEdit 定高内滚（其 viewport-height 与
-/// height 内置互绑，外部读取成环，故不自适应高度）。1.17 TextEdit 不露出 color
-/// （随 FluentPalette 系统色板，见「已知边界」），提示走 placeholder-text
+/// 标签 + 多行输入（角色提示词）：输入框随布局吃行高、内容不测高自适应
+/// （TextEdit viewport-height 与 height 内置互绑，读取成环）。1.17 TextEdit
+/// 不露出 color（随 FluentPalette 系统色板，见「已知边界」），提示走 placeholder-text
 component PromptRow inherits Rectangle {
     in property <string> label;
     in-out property <string> text;
     in property <string> hint;
 
-    height: 124px;
+    min-height: 124px;
     VerticalLayout {
         spacing: 3px;
         Text {
@@ -99,7 +99,8 @@ component PromptRow inherits Rectangle {
             wrap: word-wrap;
         }
         Rectangle {
-            height: 96px;
+            min-height: 96px;
+            vertical-stretch: 1; // 行高被撑时只有输入框长，标签不动
             border-radius: 7px;
             border-width: 1px;
             border-color: Theme.p.inputBorder;
@@ -127,7 +128,8 @@ component ProvItemRow inherits Rectangle {
     in property <bool> current;
     callback clicked();
 
-    height: 46px;
+    // 同 NavItem：min-height + 实例 stretch，条目均分列表卡剩余高
+    min-height: 46px;
     border-radius: 7px;
     background: root.current ? Theme.p.listActive
             : (ta.has-hover ? Theme.p.listHover : transparent);
@@ -140,6 +142,7 @@ component ProvItemRow inherits Rectangle {
     VerticalLayout {
         padding: 8px;
         spacing: 1px;
+        alignment: center; // 条目被 stretch 撑高后两行文字保持垂直居中
         Text {
             text: root.name;
             color: root.deleted ? Theme.p.textMuted : Theme.p.textPrimary;
@@ -184,7 +187,8 @@ component NavItem inherits Rectangle {
     in property <bool> selected;
     callback picked();
 
-    height: 34px;
+    // 不定高：仅设最小高，实例 vertical-stretch 均分卡片剩余高（写死 height 布局就不再拉伸）
+    min-height: 34px;
     border-radius: 7px;
     background: root.selected ? Theme.p.listActive
             : (ta.has-hover ? Theme.p.listHover : transparent);
@@ -521,27 +525,31 @@ export component SettingsPage inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
+                    // 四类目均分卡片剩余高（百分比自适应，卡底无死区）
                     NavItem {
                         label: "界面";
                         selected: root.page == 0;
+                        vertical-stretch: 1;
                         picked => { root.page = 0; }
                     }
                     NavItem {
                         label: "提供商";
                         selected: root.page == 1;
+                        vertical-stretch: 1;
                         picked => { root.page = 1; }
                     }
                     NavItem {
                         label: "AI 助手";
                         selected: root.page == 2;
+                        vertical-stretch: 1;
                         picked => { root.page = 2; }
                     }
                     NavItem {
                         label: "用户设定";
                         selected: root.page == 3;
+                        vertical-stretch: 1;
                         picked => { root.page = 3; }
                     }
-                    Rectangle { vertical-stretch: 1; }
                 }
             }
 
@@ -564,19 +572,21 @@ export component SettingsPage inherits Rectangle {
                             label: "＋ 新增";
                             picked => { root.add-menu = true; }
                         }
+                        // 提供商条目均分剩余高（与导航卡同一自适应语言）
                         for pr in root.provs : ProvItemRow {
                             name: pr.name;
                             kind: pr.kind;
                             active: pr.active;
                             deleted: pr.deleted;
                             current: pr.id == root.prov-sel;
+                            vertical-stretch: 1;
                             clicked => {
                                 root.prov-selected(pr.id);
                                 root.mdl-edit = "";
                                 root.custom-open = false;
                             }
                         }
-                        Rectangle { vertical-stretch: 1; }
+                        Rectangle { vertical-stretch: 2; }
                     }
                     // 新增弹层：卡内锚「＋ 新增」正下方（后于布局声明 = 盖在上层）
                     if root.add-menu : Rectangle {
@@ -907,6 +917,9 @@ export component SettingsPage inherits Rectangle {
 
                     if root.page == 0 : VerticalLayout {
                         spacing: 10px;
+                        // 内容垂直居中占位（卡底无死区）
+                        vertical-stretch: 1;
+                        alignment: center;
                         Text {
                             text: "主题";
                             color: Theme.p.textMuted;
@@ -942,32 +955,33 @@ export component SettingsPage inherits Rectangle {
                             font-size: 11px;
                             wrap: word-wrap;
                         }
-                        Rectangle { vertical-stretch: 1; }
                     }
 
                     if root.page == 2 : VerticalLayout {
                         spacing: 10px;
+                        vertical-stretch: 1;
                         PromptRow {
                             label: "助手设定（system prompt：每次发送前置注入，留空 = 不发）";
                             text <=> root.ed-system;
                             hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
+                            vertical-stretch: 1;
                         }
                         FieldRow {
                             label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
                             text <=> root.ed-temp;
                             hint: "0.7";
                         }
-                        Rectangle { vertical-stretch: 1; }
                     }
 
                     if root.page == 3 : VerticalLayout {
                         spacing: 10px;
+                        vertical-stretch: 1;
                         PromptRow {
                             label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
                             text <=> root.ed-persona;
                             hint: "例如：资深 Rust 工程师，关注架构与成本";
+                            vertical-stretch: 1;
                         }
-                        Rectangle { vertical-stretch: 1; }
                     }
                 }
             }
