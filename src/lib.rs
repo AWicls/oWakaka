@@ -1,6 +1,6 @@
 //! oWakaka 库目标：Windows 本地 AI 对话客户端的全部逻辑。
 //!
-//! 当前进度（P0 · 第三步）：OpenAI chat 兼容通信（默认流式 SSE）+ Slint 对话壳最小闭环。
+//! 当前进度（P0 · 第四步）：OpenAI chat/responses 双接口通信（默认流式 SSE）+ 三框对话 UI（侧栏内存多会话，未持久化）。
 //! 规划顺序：SQLite 会话持久化 → 主题自适应/交互打磨（P0）→ RAG（P1）→ A2A + MCP 客户端（P2，MCP 服务端后置）。
 //!
 //! 模块结构：

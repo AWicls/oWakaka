@@ -1,4 +1,4 @@
-// oWakaka P0 对话壳：3:2 窗口，消息聊天气泡流，底部输入框 + 发送按钮。
+// oWakaka P0 对话壳：三框布局——左侧会话栏（可拖宽）| 右上对话区 | 右下输入区（可拖高）。
 // 助手气泡含思考过程三态展示（收起/部分/全开）。
 // 当前为硬编码深色配色，浅色/深色自适应后续增量处理。
 
@@ -142,32 +142,187 @@ component Bubble inherits Rectangle {
         : (thinking-open ? think-frame.y + think-frame.height : think-btn.y + think-btn.height) + 12px;
 }
 
-/// 输入区（微信式）：多行编辑器 + 右下角发送按钮，独立于聊天滚动区。
-/// 高度随内容自适应，上限 8 行（约 152px），超出后内部滚动。
+/// 侧栏一行数据源：会话标题 + 是否选中。
+export struct SessionItem {
+    title: string,
+    active: bool,
+}
+
+/// 侧栏列表的一行：圆角条，选中/悬停高亮，超长标题省略号。
+component SessionRow inherits Rectangle {
+    in property <string> title;
+    in property <bool> active;
+    callback row-clicked();
+
+    height: 38px;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.row-clicked(); }
+    }
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-radius: 9px;
+        background: root.active ? #2f6fed3d : (ta.has-hover ? #ffffff12 : transparent);
+        Text {
+            x: 10px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width - 20px;
+            text: root.title;
+            color: root.active ? #e6e9ef : #aeb4bf;
+            font-size: 13px;
+            overflow: elide;
+        }
+    }
+}
+
+/// 左侧会话栏卡片：顶部「开始新对话」，下方会话列表可滚动。
+component SessionSidebar inherits Rectangle {
+    in property <[SessionItem]> sessions;
+    callback new-clicked();
+    callback row-clicked(int);
+
+    background: #1e2026;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: #ffffff14;
+    clip: true;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        new-btn := Rectangle {
+            height: 36px;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #ffffff26;
+            background: nt.has-hover ? #ffffff1a : #ffffff0d;
+            nt := TouchArea {
+                width: parent.width;
+                height: parent.height;
+                mouse-cursor: pointer;
+                clicked => { root.new-clicked(); }
+            }
+            Text {
+                width: parent.width;
+                y: (parent.height - self.height) / 2;
+                text: "+ 开始新对话";
+                color: #d7dade;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                spacing: 2px;
+                for s[index] in root.sessions: SessionRow {
+                    title: s.title;
+                    active: s.active;
+                    row-clicked => { root.row-clicked(index); }
+                }
+            }
+        }
+    }
+}
+
+/// 纵向拖拽条：position = 左栏宽度。按住拖动即改写 position（打断外部初始
+/// 绑定后钉死），悬停/拖动时小白条提亮；取值范围由使用方 min/max 约束。
+component VSplitter inherits Rectangle {
+    in-out property <length> position;
+    in property <length> min-pos;
+    in property <length> max-pos;
+    property <length> grab: 0px;
+    property <length> start-pos: 0px;
+
+    width: 12px;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: col-resize;
+        // 按下瞬间记录：按下处与当时的 position（moved 仅在按住时触发）
+        changed pressed => {
+            if (self.pressed) {
+                root.grab = self.mouse-x;
+                root.start-pos = root.position;
+            }
+        }
+        moved => {
+            root.position = Math.max(root.min-pos, Math.min(root.max-pos,
+                root.start-pos + self.mouse-x - root.grab));
+        }
+    }
+    Rectangle {
+        width: 3px;
+        height: parent.height * 0.3;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 2px;
+        background: white;
+        opacity: (ta.pressed || ta.has-hover) ? 0.85 : 0.18;
+    }
+}
+
+/// 横向拖拽条：position = 输入区高度；向上拖增高（delta 取负）。
+component HSplitter inherits Rectangle {
+    in-out property <length> position;
+    in property <length> min-pos;
+    in property <length> max-pos;
+    property <length> grab: 0px;
+    property <length> start-pos: 0px;
+
+    height: 12px;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: row-resize;
+        changed pressed => {
+            if (self.pressed) {
+                root.grab = self.mouse-y;
+                root.start-pos = root.position;
+            }
+        }
+        // position = 输入区高度：向下拖（mouse-y 增大）则减小
+        moved => {
+            root.position = Math.max(root.min-pos, Math.min(root.max-pos,
+                root.start-pos + root.grab - self.mouse-y));
+        }
+    }
+    Rectangle {
+        width: parent.width * 0.25;
+        height: 3px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 2px;
+        background: white;
+        opacity: (ta.pressed || ta.has-hover) ? 0.85 : 0.18;
+    }
+}
+
+/// 输入区卡片：总高由外层拖拽条（HSplitter.position）控制；
+/// 编辑器吃满剩余高度，内容超出时编辑器内部滚动。
 component InputArea inherits Rectangle {
     in property <bool> busy;
     callback send-submit(string);
 
-    height: ed.height + btn-row.height + 16px;
-
-    // 镜像测量文本：与编辑器同宽同字号，其 height 即内容总高。
-    // （TextEdit 的 viewport-height 与自身 height 内置互绑，外部读取会成环，不能用作测量）
-    ed-measure := Text {
-        text: ed.text;
-        font-size: 14px;
-        width: ed.width - 16px; // 扣除编辑器内边距，近似换行宽度
-        x: 0px;
-        y: -100000px;
-        wrap: word-wrap;
-    }
+    background: #1e2026;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: #ffffff14;
 
     ed := TextEdit {
-        x: 8px;
-        y: 8px;
-        width: parent.width - 16px;
+        x: 12px;
+        y: 10px;
+        width: parent.width - 24px;
+        // 54 = 上 10 + 间距 6 + 按钮行 28 + 下 10；下限 24px 防拖到最小时塌陷
+        height: Math.max(24px, root.height - 54px);
         font-size: 14px;
-        // 高度随内容自适应：约 1 行起步，上限 8 行（168px），超出后编辑器内部滚动
-        height: min(max(ed-measure.height + 16px, 40px), 168px);
         placeholder-text: "输入消息，Ctrl+Enter 发送（Enter 换行）";
         enabled: !root.busy;
         // 先于编辑器处理按键：Ctrl+Enter 发送并吞掉；普通 Enter 放行 → 换行
@@ -184,9 +339,9 @@ component InputArea inherits Rectangle {
     }
 
     btn-row := HorizontalLayout {
-        x: 8px;
-        y: ed.y + ed.height + 2px;
-        width: parent.width - 16px;
+        x: 12px;
+        y: root.height - 28px - 10px;
+        width: parent.width - 24px;
         // 显式高度：游离 layout 默认高度=parent.height，会构成绑定环
         height: 28px;
         // 左侧弹性占位，按钮贴右下
@@ -207,56 +362,97 @@ component InputArea inherits Rectangle {
 export component AppWindow inherits Window {
     title: "oWakaka";
     background: #17181c;
-    // 3:2 方框
-    preferred-width: 960px;
-    preferred-height: 640px;
-    min-width: 420px;
-    min-height: 320px;
+    preferred-width: 1120px;
+    preferred-height: 720px;
+    min-width: 720px;
+    min-height: 460px;
 
     in property <[ChatMessage]> messages;
     in property <bool> busy;
+    in property <[SessionItem]> sessions;
     callback send(string);
     callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
+    callback new-session();
+    callback select-session(int);
 
-    VerticalLayout {
-        padding: 8px;
-        spacing: 8px;
+    // 侧栏初始宽 190px（默认窗口 1120 的 ~17%）；不得引用 root.width，
+    // 否则进入 layoutinfo 环。拖动 vsplit 改写 position 后此值即失效
+    property <length> side-width: 190px;
 
-        ScrollView {
-            // 粘底状态机：viewport-y 为负值语义（0=顶部，height-viewport-height=底部）。
-            // scrolled() 仅在用户滚动时触发：滚离底部即脱离粘底，滚回底部自动恢复；
-            // 内容变化时仅当粘底才贴底。
-            property <bool> stick: true;
-            scrolled => {
-                self.stick = self.viewport-y <= self.height - self.viewport-height + 2px;
-            }
-            changed viewport-height => {
-                if (self.stick) {
-                    self.viewport-y = self.height - self.viewport-height;
-                }
-            }
-            changed height => {
-                if (self.stick) {
-                    self.viewport-y = self.height - self.viewport-height;
-                }
-            }
-            VerticalLayout {
-                for m in root.messages: Bubble {
-                    msg: m;
-                    // 手动切换即脱离自动态，此后不再被自动收起
-                    think-toggled => {
-                        m.tstate = Math.mod(m.tstate + 1, 3);
-                        m.tauto = false;
-                    }
-                    copy-request(text) => { root.copy(text); }
-                }
-            }
+    HorizontalLayout {
+        padding: 10px;
+        spacing: 0;
+
+        SessionSidebar {
+            width: vsplit.position;
+            sessions: root.sessions;
+            new-clicked => { root.new-session(); }
+            row-clicked(i) => { root.select-session(i); }
+        }
+        vsplit := VSplitter {
+            position: root.side-width;
+            min-pos: 150px;
+            max-pos: 420px;
         }
 
-        // —— 独立输入区：与聊天区分隔，按钮在输入框底部右侧 ——
-        InputArea {
-            busy: root.busy;
-            send-submit(text) => { root.send(text); }
+        VerticalLayout {
+            spacing: 0;
+
+            // 聊天卡片：吃满剩余高度；滚动区四周留白 8px
+            Rectangle {
+                vertical-stretch: 1;
+                background: #1e2026;
+                border-radius: 14px;
+                border-width: 1px;
+                border-color: #ffffff14;
+                clip: true;
+
+                ScrollView {
+                    x: 8px;
+                    y: 8px;
+                    width: parent.width - 16px;
+                    height: parent.height - 16px;
+                    // 粘底状态机：viewport-y 为负值语义（0=顶部，height-viewport-height=底部）。
+                    // scrolled() 仅在用户滚动时触发：滚离底部即脱离粘底，滚回底部自动恢复；
+                    // 内容变化时仅当粘底才贴底。
+                    property <bool> stick: true;
+                    scrolled => {
+                        self.stick = self.viewport-y <= self.height - self.viewport-height + 2px;
+                    }
+                    changed viewport-height => {
+                        if (self.stick) {
+                            self.viewport-y = self.height - self.viewport-height;
+                        }
+                    }
+                    changed height => {
+                        if (self.stick) {
+                            self.viewport-y = self.height - self.viewport-height;
+                        }
+                    }
+                    VerticalLayout {
+                        for m in root.messages: Bubble {
+                            msg: m;
+                            // 手动切换即脱离自动态，此后不再被自动收起
+                            think-toggled => {
+                                m.tstate = Math.mod(m.tstate + 1, 3);
+                                m.tauto = false;
+                            }
+                            copy-request(text) => { root.copy(text); }
+                        }
+                    }
+                }
+            }
+
+            hs := HSplitter {
+                position: 120px;
+                min-pos: 64px;
+                max-pos: 260px;
+            }
+            InputArea {
+                height: hs.position;
+                busy: root.busy;
+                send-submit(text) => { root.send(text); }
+            }
         }
     }
 }
