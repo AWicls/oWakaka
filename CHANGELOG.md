@@ -8,6 +8,10 @@
 ## [Unreleased]
 
 ### Added
+- UI 模型切换与程序内设置弹窗：
+  - 输入区左下角新增模型按钮（Thinking 左侧）：点击向上弹出清单 = config `[models]` 别名 ∪ 远端 `GET /models`（首次打开异步拉取，失败下回重试），选中即切换激活模型（后续发送携带）并回写 `config.toml model` 字段
+  - 会话栏左下角新增设置按钮（主题按钮旁，滑杆图标）：打开程序内居中弹窗（遮罩点击关闭），可编辑并落盘 提供商（通用兼容/小米 MiMo 二选一）、API 根地址、API 密钥（留空=不改）、激活模型；校验不过不落盘并在弹窗内回显错误，保存成功后客户端缓存失效、下一次发送即用新配置
+  - 别名表编辑暂不支持（`[models]` 仍可手工改文件，下轮并入弹窗）
 - 提供商定制接口落地（`ai::provider::Customization`，一家一个子模块实现）：
   - 小米 MiMo 真实定制：鉴权改厂商首选 `api-key` 头（替代通用 Bearer）；请求体发送前剔除厂商不支持字段（`background`/`previous_response_id`/`context_management`）；思考开启时显式注入 `reasoning.effort="low"`（MiMo 各档等效），关闭沿用 `effort=none`
   - 定制注入点覆盖 chat/responses 两端点族 × 流式/非流式全路径与 `GET /models`；通用（custom）路径零行为变化

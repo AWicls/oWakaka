@@ -1,0 +1,177 @@
+// 程序内设置弹窗：config.toml 核心字段（提供商/端点/密钥/激活模型）的读写表单。
+// 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
+
+import { Theme } from "theme.slint";
+
+/// 标签 + 单行输入框（空值时显示灰色提示）
+component FieldRow inherits Rectangle {
+    in property <string> label;
+    in-out property <string> text;
+    in property <string> hint;
+
+    height: 52px;
+    VerticalLayout {
+        spacing: 3px;
+        Text {
+            text: root.label;
+            color: Theme.p.textMuted;
+            font-size: 12px;
+        }
+        Rectangle {
+            height: 30px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: Theme.p.windowBg;
+            ti := TextInput {
+                x: 8px;
+                y: (parent.height - self.height) / 2;
+                width: parent.width - 16px;
+                font-size: 13px;
+                single-line: true;
+                color: Theme.p.textPrimary;
+                selection-background-color: Theme.p.accentSoftBg;
+                text <=> root.text;
+            }
+            Text {
+                visible: root.hint != "" && ti.text == "";
+                x: 8px;
+                y: (parent.height - self.height) / 2;
+                text: root.hint;
+                color: Theme.p.textMuted;
+                font-size: 13px;
+            }
+        }
+    }
+}
+
+/// 胶囊选项按钮（提供商二选一 / 底部保存取消）
+component Pill inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> primary: false;
+    callback picked();
+
+    height: 30px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.selected || root.primary
+            ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
+    background: root.primary ? Theme.p.accent
+            : (root.selected ? Theme.p.accentSoftBg
+            : (ta.has-hover ? Theme.p.listHover : transparent));
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    Text {
+        width: parent.width;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.primary ? white : Theme.p.textPrimary;
+        font-size: 13px;
+        horizontal-alignment: center;
+    }
+}
+
+/// 设置表单卡片：初值由 AppWindow 注入（打开时从 config.toml 读取），
+/// 保存经回调交给 Rust 侧校验落盘，状态行回显成功/失败文案
+export component SettingsDialog inherits Rectangle {
+    in property <int> init-provider; // 0 通用兼容 | 1 小米 MiMo（与 Rust 映射一致）
+    in property <string> init-base-url;
+    in property <string> init-api-key;
+    in property <string> init-model;
+    in property <string> status;
+    callback saved(int, string, string, string);
+    callback closed();
+
+    property <int> picked-provider: root.init-provider;
+
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: Theme.p.panelBorder;
+    background: Theme.p.panelBg;
+    clip: true;
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 10px;
+
+        Text {
+            text: "设置";
+            color: Theme.p.textPrimary;
+            font-size: 16px;
+        }
+
+        Text {
+            text: "提供商";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            height: 30px;
+            Rectangle { horizontal-stretch: 1; }
+            Pill {
+                width: 120px;
+                label: "通用兼容";
+                selected: root.picked-provider == 0;
+                picked => { root.picked-provider = 0; }
+            }
+            Pill {
+                width: 120px;
+                label: "小米 MiMo";
+                selected: root.picked-provider == 1;
+                picked => { root.picked-provider = 1; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+
+        url-field := FieldRow {
+            label: "API 根地址（custom 必填；MiMo 留空 = 官方端点，写了 = 专属网关覆盖）";
+            text: root.init-base-url;
+            hint: "https://api.xiaomimimo.com/v1";
+        }
+        key-field := FieldRow {
+            label: "API 密钥（留空 = 保持已存值不变）";
+            text: root.init-api-key;
+            hint: "sk-...";
+        }
+        model-field := FieldRow {
+            label: "激活模型（模型下拉与请求携带的 model 字段）";
+            text: root.init-model;
+            hint: "mimo-v2.5";
+        }
+
+        Text {
+            visible: root.status != "";
+            text: root.status;
+            color: Theme.p.link;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalLayout {
+            spacing: 8px;
+            height: 30px;
+            Rectangle { horizontal-stretch: 1; }
+            Pill {
+                width: 72px;
+                label: "取消";
+                picked => { root.closed(); }
+            }
+            Pill {
+                width: 72px;
+                label: "保存";
+                primary: true;
+                picked => {
+                    root.saved(root.picked-provider, url-field.text,
+                        key-field.text, model-field.text);
+                }
+            }
+        }
+    }
+}

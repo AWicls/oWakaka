@@ -90,11 +90,12 @@ component ThemeOption inherits Rectangle {
     }
 }
 
-/// 左侧会话栏卡片：顶部「开始新对话」，中部会话列表可滚动，左下角主题切换。
+/// 左侧会话栏卡片：顶部「开始新对话」，中部会话列表可滚动，底部主题/设置按钮行。
 export component SessionSidebar inherits Rectangle {
     in property <[SessionItem]> sessions;
     callback new-clicked();
     callback row-clicked(int);
+    callback settings-clicked(); // 打开程序内设置弹窗
 
     background: Theme.p.panelBg;
     border-radius: 14px;
@@ -142,27 +143,52 @@ export component SessionSidebar inherits Rectangle {
             }
         }
 
-        // —— 左下角主题按钮：太阳/月亮/显示器图标随当前模式切换 ——
-        theme-btn := Rectangle {
+        // —— 左下角按钮行：主题切换 + 程序内设置 ——
+        bottom-row := HorizontalLayout {
+            spacing: 4px;
             height: 34px;
-            width: 40px;
-            border-radius: 8px;
-            background: tb.has-hover ? Theme.p.listHover : transparent;
-            tb := TouchArea {
-                width: parent.width;
-                height: parent.height;
-                mouse-cursor: pointer;
-                clicked => { root.menu-open = !root.menu-open; }
+            theme-btn := Rectangle {
+                width: 40px;
+                height: 34px;
+                border-radius: 8px;
+                background: tb.has-hover ? Theme.p.listHover : transparent;
+                tb := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    mouse-cursor: pointer;
+                    clicked => { root.menu-open = !root.menu-open; }
+                }
+                Icon {
+                    x: 12px;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    // 0 太阳 | 1 月亮 | 2 跟随系统
+                    which: Theme.mode == 0 ? 0 : Theme.mode == 1 ? 1 : 2;
+                    ink: Theme.p.textSecondary;
+                }
             }
-            Icon {
-                x: 12px;
-                y: (parent.height - self.height) / 2;
-                width: 16px;
-                height: 16px;
-                // 0 太阳 | 1 月亮 | 2 跟随系统
-                which: Theme.mode == 0 ? 0 : Theme.mode == 1 ? 1 : 2;
-                ink: Theme.p.textSecondary;
+            Rectangle {
+                width: 40px;
+                height: 34px;
+                border-radius: 8px;
+                background: stb.has-hover ? Theme.p.listHover : transparent;
+                stb := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    mouse-cursor: pointer;
+                    clicked => { root.settings-clicked(); }
+                }
+                Icon {
+                    x: 12px;
+                    y: (parent.height - self.height) / 2;
+                    width: 16px;
+                    height: 16px;
+                    which: 5; // 设置滑杆
+                    ink: Theme.p.textSecondary;
+                }
             }
+            Rectangle { } // 左对齐，余量吃掉在右
         }
     }
 
@@ -174,11 +200,11 @@ export component SessionSidebar inherits Rectangle {
         TouchArea { clicked => { root.menu-open = false; } }
     }
 
-    // 主题菜单弹层：锚定左下角按钮上方
+    // 主题菜单弹层：锚定左下角按钮行上方
     Rectangle {
         visible: root.menu-open;
         x: 10px;
-        y: theme-btn.y - self.height - 4px;
+        y: bottom-row.y - self.height - 4px;
         width: 150px;
         height: 3 * 34px + 12px;
         border-radius: 10px;

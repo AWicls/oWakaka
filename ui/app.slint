@@ -9,6 +9,7 @@ import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
 import { InputArea, ModelItem } from "input.slint";
+import { SettingsDialog } from "settings.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct
 export { ChatMessage, SessionItem, ModelItem }
@@ -27,6 +28,13 @@ export component AppWindow inherits Window {
     in property <[SessionItem]> sessions;
     in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
     in property <string> model-label; // 当前激活模型显示名
+    in property <bool> settings-open; // 设置弹窗开关（Rust 侧点击齿轮置 true）
+    // 设置弹窗初值：Rust 打开时从 config.toml 读取注入
+    in property <int> cfg-provider;
+    in property <string> cfg-base-url;
+    in property <string> cfg-api-key;
+    in property <string> cfg-model;
+    in property <string> cfg-status; // 保存结果回显（错误/成功文案）
     callback send(string);
     callback copy(string); // 复制回答正文到系统剪贴板（Rust 侧经 arboard 落地）
     callback new-session();
@@ -35,6 +43,9 @@ export component AppWindow inherits Window {
     callback toggle-thinking();
     callback model-picked(string); // 选择模型（Rust 切换激活 + 回写 config.toml）
     callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
+    callback settings-requested(); // 打开设置弹窗（Rust 读 config 注入初值）
+    callback settings-saved(int, string, string, string); // 提供商/base_url/key/model（Rust 校验落盘）
+    callback settings-closed(); // 关闭设置弹窗
 
     // 侧栏初始宽 190px（默认窗口 1120 的 ~17%）；不得引用 root.width，
     // 否则进入 layoutinfo 环。拖动 vsplit 改写 position 后此值即失效
@@ -49,6 +60,7 @@ export component AppWindow inherits Window {
             sessions: root.sessions;
             new-clicked => { root.new-session(); }
             row-clicked(i) => { root.select-session(i); }
+            settings-clicked => { root.settings-requested(); }
         }
         vsplit := VSplitter {
             position: root.side-width;
@@ -126,6 +138,39 @@ export component AppWindow inherits Window {
                 model-picked(id) => { root.model-picked(id); }
                 models-requested => { root.models-requested(); }
             }
+        }
+    }
+
+    // —— 设置弹窗：半透明遮罩（点击关闭）+ 居中表单卡片 ——
+    Rectangle {
+        visible: root.settings-open;
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: rgba(0, 0, 0, 0.45);
+        TouchArea {
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.settings-closed(); }
+        }
+    }
+    // if-block：每次打开重建 SettingsDialog 实例，表单初值即最新注入的 cfg-*
+    if root.settings-open : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 440px;
+        height: 460px;
+        SettingsDialog {
+            width: parent.width;
+            height: parent.height;
+            init-provider: root.cfg-provider;
+            init-base-url: root.cfg-base-url;
+            init-api-key: root.cfg-api-key;
+            init-model: root.cfg-model;
+            status: root.cfg-status;
+            saved(p, url, key, model) => { root.settings-saved(p, url, key, model); }
+            closed => { root.settings-closed(); }
         }
     }
 }

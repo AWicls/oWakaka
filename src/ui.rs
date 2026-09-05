@@ -40,6 +40,7 @@ use std::{
 use crate::ai::{
     client::{Client, TurnEvent, TurnOptions},
     config::{Config, store_toml},
+    provider::Provider,
 };
 use slint::{SharedString, Timer, TimerMode, VecModel};
 
@@ -168,6 +169,45 @@ fn persist_model(id: &str) -> Result<(), Box<dyn std::error::Error>> {
     cfg.model = id.to_string();
     store_toml(&cfg, "config.toml")?;
     Ok(())
+}
+
+/// 设置弹窗保存：只更新暴露字段（stream/api/[models] 等原样保留），
+/// 校验不过不落盘；成功则失效客户端缓存并同步模型下拉（允许重拉远端清单）
+fn save_settings(
+    p: i32,
+    url: &str,
+    key: &str,
+    model: &str,
+    cache: &ClientCache,
+    models: &ModelsState,
+    window: &AppWindow,
+) -> SharedString {
+    let mut cfg = match Config::load() {
+        Ok(cfg) => cfg,
+        Err(e) => return format!("读取 config.toml 失败: {e}").into(),
+    };
+    cfg.provider = if p == 1 {
+        Provider::XiaomiMimo
+    } else {
+        Provider::Custom
+    };
+    cfg.base_url = url.trim().to_string();
+    if !key.trim().is_empty() {
+        cfg.api_key = key.trim().to_string(); // 空密钥 = 保持已存值
+    }
+    cfg.model = model.trim().to_string();
+    if let Err(e) = cfg.validate() {
+        return e.into();
+    }
+    if let Err(e) = store_toml(&cfg, "config.toml") {
+        return format!("保存失败: {e}").into();
+    }
+    *cache.lock().unwrap() = None; // 下一次发送按新配置重建客户端
+    *models.active.borrow_mut() = cfg.model.clone();
+    models.fetched.set(false);
+    models.rebuild(None);
+    models.apply(window);
+    "已保存，下一次发送生效".into()
 }
 
 /// UI 主入口：构建窗口、接线交互、运行 Slint 事件循环直到窗口关闭。
@@ -328,6 +368,57 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     let result = client.list_models().await.map_err(|e| e.to_string());
                     let _ = tx.send(UiMsg::Models(result));
                 });
+            }
+        });
+    }
+
+    // —— 设置弹窗：打开注入 config 初值；保存=校验落盘 + 失效客户端缓存 + 同步模型态 ——
+    {
+        window.on_settings_requested({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                // 读不到配置也照常开弹窗（字段空白），保存时报错引导
+                if let Ok(cfg) = Config::load() {
+                    w.set_cfg_provider(if cfg.provider == Provider::XiaomiMimo {
+                        1
+                    } else {
+                        0
+                    });
+                    w.set_cfg_base_url(cfg.base_url.into());
+                    w.set_cfg_api_key(cfg.api_key.into());
+                    w.set_cfg_model(cfg.model.into());
+                } else {
+                    *cache.lock().unwrap() = None;
+                }
+                w.set_cfg_status(SharedString::default());
+                w.set_settings_open(true);
+            }
+        });
+        window.on_settings_closed({
+            let window_weak = window.as_weak();
+            move || {
+                if let Some(w) = window_weak.upgrade() {
+                    w.set_settings_open(false);
+                }
+            }
+        });
+        window.on_settings_saved({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            let models = models.clone();
+            move |p, url, key, model| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let status = save_settings(p, &url, &key, &model, &cache, &models, &w);
+                w.set_cfg_status(status.clone());
+                if status.starts_with("已保存") {
+                    w.set_settings_open(false);
+                }
             }
         });
     }
