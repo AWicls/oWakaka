@@ -2,7 +2,7 @@
 //! 线格式见 [`crate::ai::dto::openai_response`]。
 
 use crate::ai::{
-    client::{ChatError, Client, StreamEvent},
+    client::{ChatError, Client, StreamEvent, encode_body},
     dto::{
         openai_chat::request::Request,
         openai_response::{
@@ -14,85 +14,29 @@ use crate::ai::{
 };
 
 impl Client {
-    /// 非流式对话：`POST {base_url}/responses`，
-    /// 请求体由公共兼容 DTO [`Request`] 经本模块 `to_resp_request` 转换而来。
+    /// 非流式对话：`POST {base_url}/responses`，请求体由公共兼容 DTO [`Request`]
+    /// 经本模块 `to_resp_request` 转换后 [`encode_body`] 组装，发送走 [`Client::post_json`]。
     ///
     /// 正文提取用 [`Response::assistant_text`](RespResponse::assistant_text)，
     /// 思考摘要用 [`Response::reasoning_text`](RespResponse::reasoning_text)。
     pub async fn respond(&self, req: &Request) -> Result<RespResponse, ChatError> {
-        let mut body =
-            serde_json::to_value(to_resp_request(req)).map_err(|e| ChatError::Decode {
-                error: e.to_string(),
-                body: String::new(),
-            })?;
-        self.decorated(&mut body);
-        let resp = self
-            .authed(self.http.post(format!("{}/responses", self.base_url)))
-            .json(&body)
-            .send()
-            .await?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        if !status.is_success() {
-            return Err(ChatError::Api { status, body });
-        }
-        serde_json::from_str(&body).map_err(|e| ChatError::Decode {
-            error: e.to_string(),
-            body,
-        })
+        self.post_json("responses", encode_body(&to_resp_request(req))?)
+            .await
     }
 
-    /// 流式对话：`stream: true` 请求 `/responses`，按语义事件转 [`StreamEvent`] 同步回调。
+    /// 流式对话：`stream: true` 请求 `/responses`，骨架走 [`Client::stream_sse`]，
+    /// 逐行交给 [`handle_resp_sse_line`] 按语义事件转 [`StreamEvent`] 同步回调。
     ///
-    /// 与 chat 族流式的差异只在事件协议（见 [`handle_resp_sse_line`]），网络骨架相同：
-    /// - 终止事件 `response.completed` / `response.incomplete` 或 `[DONE]` 哨兵
-    ///   （部分网关照 chat 习惯追加）即返回；EOF 同样视为正常结束
-    /// - `error` / `response.failed` 事件报 [`ChatError::Stream`]，
-    ///   之前已回调的增量不回滚
+    /// 与 chat 族流式的差异只在事件协议（`handle_resp_sse_line`），网络骨架相同。
     pub async fn respond_stream(
         &self,
         req: &Request,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<(), ChatError> {
-        let mut body =
-            serde_json::to_value(to_resp_request(req)).map_err(|e| ChatError::Decode {
-                error: e.to_string(),
-                body: String::new(),
-            })?;
-        body["stream"] = serde_json::Value::Bool(true);
-        self.decorated(&mut body);
-
-        let resp = self
-            .authed(self.http.post(format!("{}/responses", self.base_url)))
-            .json(&body)
-            .send()
-            .await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await?;
-            return Err(ChatError::Api { status, body });
-        }
-
-        let mut resp = resp;
-        let mut buf: Vec<u8> = Vec::new();
-        loop {
-            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                let raw: Vec<u8> = buf.drain(..=pos).collect();
-                let line = String::from_utf8_lossy(&raw);
-                if handle_resp_sse_line(line.trim_end(), &mut on_event)? {
-                    return Ok(());
-                }
-            }
-            match resp.chunk().await? {
-                Some(bytes) => buf.extend_from_slice(&bytes),
-                None => break,
-            }
-        }
-        let tail = String::from_utf8_lossy(&buf).trim().to_string();
-        if !tail.is_empty() {
-            handle_resp_sse_line(&tail, &mut on_event)?;
-        }
-        Ok(())
+        self.stream_sse("responses", encode_body(&to_resp_request(req))?, |line| {
+            handle_resp_sse_line(line, &mut on_event)
+        })
+        .await
     }
 
     /// Responses 族对话入口：按配置 `stream` 分流式 / 非流式（由 [`Client::generate`] 调用）。

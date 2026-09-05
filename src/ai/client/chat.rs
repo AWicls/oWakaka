@@ -2,98 +2,32 @@
 //! 线格式见 [`crate::ai::dto::openai_chat`]。
 
 use crate::ai::{
-    client::{ChatError, Client, StreamEvent},
+    client::{ChatError, Client, StreamEvent, encode_body},
     dto::openai_chat::{chunk::Chunk, request::Request, response::Response},
 };
 
 impl Client {
-    /// 非流式对话：`POST {base_url}/chat/completions`，鉴权经 [`Client::authed`]
-    /// （通用 Bearer / 定制提供商按厂家方式），JSON 收发前过 [`Client::decorated`] 定制钩子。
-    ///
-    /// 错误语义见 [`ChatError`]：先取响应体文本再解析，
-    /// 保证非 2xx 与"2xx 但非合法 JSON"两种情况都带原始响应体，厂家信息不丢。
+    /// 非流式对话：`POST {base_url}/chat/completions`，请求体经 [`encode_body`] 组装，
+    /// 发送与错误语义走 [`Client::post_json`] 共享骨架（非 2xx→[`ChatError::Api`]、
+    /// 解析失败→[`ChatError::Decode`]，均带原始响应体，厂家信息不丢）。
     pub async fn chat(&self, req: &Request) -> Result<Response, ChatError> {
-        let mut body = serde_json::to_value(req).map_err(|e| ChatError::Decode {
-            error: e.to_string(),
-            body: String::new(),
-        })?;
-        self.decorated(&mut body);
-        let resp = self
-            .authed(
-                self.http
-                    .post(format!("{}/chat/completions", self.base_url)),
-            )
-            .json(&body)
-            .send()
-            .await?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        if !status.is_success() {
-            return Err(ChatError::Api { status, body });
-        }
-        serde_json::from_str(&body).map_err(|e| ChatError::Decode {
-            error: e.to_string(),
-            body,
-        })
+        self.post_json("chat/completions", encode_body(req)?).await
     }
 
-    /// 流式对话：注入 `stream: true` 后请求同一端点，
-    /// 每收到一段思考/回答文本增量就同步回调 [`StreamEvent`]，
-    /// 读到 `data: [DONE]` 或连接自然关闭即返回 `Ok(())`。
+    /// 流式对话：`stream: true` 请求同一端点，骨架见 [`Client::stream_sse`]，
+    /// 逐行交给 [`handle_sse_line`] 转 [`StreamEvent`] 同步回调。
     ///
-    /// 语义约定：
-    /// - 错误同 [`chat`](Self::chat)；流中途出错时，之前已回调的增量不回滚
-    /// - `on_event` 在读循环内同步执行，回调做重活会背压网络读取（UI 刷新场景通常正是期望行为）
-    /// - 个别网关不发 `[DONE]`，EOF 视为正常结束而非错误
+    /// 语义约定：错误同 [`chat`](Self::chat)；流中途出错时之前已回调的增量不回滚；
+    /// `on_event` 在读循环内同步执行（回调做重活会背压网络读取）；EOF 视为正常结束。
     pub async fn chat_stream(
         &self,
         req: &Request,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<(), ChatError> {
-        // stream 标志注入序列化后的请求体，不污染 Request DTO
-        let mut body = serde_json::to_value(req).map_err(|e| ChatError::Decode {
-            error: e.to_string(),
-            body: String::new(),
-        })?;
-        body["stream"] = serde_json::Value::Bool(true);
-        self.decorated(&mut body);
-
-        let resp = self
-            .authed(
-                self.http
-                    .post(format!("{}/chat/completions", self.base_url)),
-            )
-            .json(&body)
-            .send()
-            .await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await?;
-            return Err(ChatError::Api { status, body });
-        }
-
-        let mut resp = resp;
-        let mut buf: Vec<u8> = Vec::new();
-        loop {
-            // 先消费缓冲区里已完整的行（UTF-8 序列不含 0x0A，按 \n 切分安全）
-            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                let raw: Vec<u8> = buf.drain(..=pos).collect();
-                let line = String::from_utf8_lossy(&raw);
-                // 收到终止哨兵即返回：同块残留字节不再消费
-                if handle_sse_line(line.trim_end(), &mut on_event)? {
-                    return Ok(());
-                }
-            }
-            match resp.chunk().await? {
-                Some(bytes) => buf.extend_from_slice(&bytes),
-                None => break, // EOF：处理末尾无换行行的残段后正常结束
-            }
-        }
-        let tail = String::from_utf8_lossy(&buf).trim().to_string();
-        if !tail.is_empty() {
-            handle_sse_line(&tail, &mut on_event)?;
-        }
-        Ok(())
+        self.stream_sse("chat/completions", encode_body(req)?, |line| {
+            handle_sse_line(line, &mut on_event)
+        })
+        .await
     }
 
     /// chat 族对话入口：按配置 `stream` 分流式 / 非流式（由 [`Client::generate`] 调用）。

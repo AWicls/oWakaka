@@ -53,6 +53,8 @@ pub use turn::{TurnEvent, TurnHandle, TurnOptions, TurnPersona};
 
 use std::time::Duration;
 
+use serde::Serialize;
+
 use crate::ai::{
     config::{Api, Config},
     dto::{models::ModelList, openai_chat::request::Request},
@@ -159,6 +161,75 @@ impl Client {
         }
     }
 
+    /// 非流式 POST 共享骨架：定制钩子 → 鉴权 → 发送 → 统一错误语义
+    /// （非 2xx → [`ChatError::Api`]，2xx 但反序列化失败 → [`ChatError::Decode`]，均带原响应体）。
+    /// `path` 为相对 `base_url` 的端点，各端点族经 [`encode_body`] 传入已组装的请求体。
+    pub(crate) async fn post_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        mut body: serde_json::Value,
+    ) -> Result<T, ChatError> {
+        self.decorated(&mut body);
+        let resp = self
+            .authed(self.http.post(format!("{}/{}", self.base_url, path)))
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(ChatError::Api { status, body: text });
+        }
+        serde_json::from_str(&text).map_err(|e| ChatError::Decode {
+            error: e.to_string(),
+            body: text,
+        })
+    }
+
+    /// 流式 POST 共享骨架：注入 `stream: true` → 定制钩子 → 鉴权 → 发送 →
+    /// 按 `\n` 逐行喂给 `on_line`（返回 `true` 即正常终止），EOF 后补喂末尾无换行残段。
+    /// 端点族差异只体现在 `on_line`（各自的 SSE 行处理器）。
+    pub(crate) async fn stream_sse(
+        &self,
+        path: &str,
+        mut body: serde_json::Value,
+        mut on_line: impl FnMut(&str) -> Result<bool, ChatError>,
+    ) -> Result<(), ChatError> {
+        body["stream"] = serde_json::Value::Bool(true);
+        self.decorated(&mut body);
+        let resp = self
+            .authed(self.http.post(format!("{}/{}", self.base_url, path)))
+            .json(&body)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await?;
+            return Err(ChatError::Api { status, body });
+        }
+        let mut resp = resp;
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            // UTF-8 序列不含 0x0A，按 \n 切分安全；先消费缓冲区里已完整的行
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let raw: Vec<u8> = buf.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&raw);
+                if on_line(line.trim_end())? {
+                    return Ok(());
+                }
+            }
+            match resp.chunk().await? {
+                Some(bytes) => buf.extend_from_slice(&bytes),
+                None => break, // EOF：处理末尾无换行行的残段后正常结束
+            }
+        }
+        let tail = String::from_utf8_lossy(&buf).trim().to_string();
+        if !tail.is_empty() {
+            on_line(&tail)?;
+        }
+        Ok(())
+    }
+
     /// 读运行配置（DB 设置 + `config.toml` 密钥，见 [`Config::load`]）构建客户端：
     /// [`validate`](crate::ai::config::Config::validate) +
     /// [`from_config`](Self::from_config) 一步到位，错误原样上抛供调用方呈现。
@@ -222,6 +293,15 @@ impl Client {
         })?;
         Ok(list.data.into_iter().map(|m| m.id).collect())
     }
+}
+
+/// DTO → 请求体 JSON：统一的序列化错误映射（失败即 [`ChatError::Decode`]，无响应体）。
+/// 各端点族的请求/流式入口共用，序列化后交给 [`Client::post_json`] / [`Client::stream_sse`]。
+pub(crate) fn encode_body<T: Serialize>(v: &T) -> Result<serde_json::Value, ChatError> {
+    serde_json::to_value(v).map_err(|e| ChatError::Decode {
+        error: e.to_string(),
+        body: String::new(),
+    })
 }
 
 #[cfg(test)]
