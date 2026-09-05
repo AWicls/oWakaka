@@ -11,15 +11,15 @@
 //! Slint 要求组件只在主线程触碰，而网络是异步的，因此：
 //!
 //! ```text
-//! 主线程  用户输入 ──▶ on_send ──▶ spawn_chat ──▶ tokio 后台任务（每轮一个，可并行）
-//!   ▲                                             │ generate（按配置分发接口族/流式）
-//!   │ Timer 30ms 排空                             │ Reasoning/Content/Done/Error
-//!   └── StreamMsg{run=sid,gen_id} ◀─ mpsc::channel ◀┘  （oneshot 通道反向取消）
+//! 主线程  用户输入 ──▶ on_send ──▶ Client::spawn_turn ─▶ tokio 后台任务（每轮一个，可并行）
+//!   ▲                                          │ generate（端点族/流式分发）
+//!   │ Timer 30ms 排空                          │ TurnEvent 全序，收尾恰一次
+//!   └── StreamMsg{run, TurnEvent} ◀─ mpsc ◀─────┘  （TurnHandle::cancel 取消）
 //! ```
 //!
-//! 增量经 `std::sync::mpsc` 回传并携带（会话号 sid，代次号 gen），Slint `Timer`
-//! 周期性在主线程排空、按 sid 路由写回原会话气泡——UI 更新始终发生在主线程，
-//! 无需跨线程句柄；oneshot 通道用于停止未完成的生成。
+//! 一轮对话的请求组装与取消编排都归 `ai::client::turn`；UI 只把 [`TurnEvent`]
+//! 打上会话标（sid, gen_id）经 `std::sync::mpsc` 回传，Slint `Timer` 周期性在
+//! 主线程排空、按 sid 路由写回原会话气泡——UI 更新始终发生在主线程。
 
 use std::{
     cell::{Cell, RefCell},
@@ -29,12 +29,10 @@ use std::{
 };
 
 use crate::ai::{
-    client::{Client, StreamEvent},
-    config::Config,
-    dto::openai_chat::request::{Message, Request},
+    client::{Client, TurnEvent, TurnHandle, TurnOptions},
+    dto::openai_chat::request::Message,
 };
 use slint::{Model, SharedString, Timer, TimerMode, VecModel};
-use tokio::sync::oneshot;
 
 slint::include_modules!();
 
@@ -45,30 +43,19 @@ struct RunRef {
     gen_id: u64,
 }
 
-/// 后台任务回流 UI 的单条事件。Timer 仅当 `run.gen_id` 与该会话当前代次
-/// 一致才接受，从而丢弃"停止后重发"的旧轮迟到事件。
+/// 后台任务回流 UI 的单条事件：`run` 定位轮次，`event` 为透传的领域事件。
+/// Timer 仅当 `run.gen_id` 与该会话当前代次一致才应用，从而丢弃"停止后重发"
+/// 的旧轮迟到事件。收尾（Done/Error）恰一次。
 struct StreamMsg {
     run: RunRef,
-    kind: StreamKind,
+    event: TurnEvent,
 }
 
-/// 事件载荷（与 `StreamEvent` 一一对应，外加收尾信号）。
-enum StreamKind {
-    /// 思考过程文本增量
-    Reasoning(String),
-    /// 回答正文文本增量
-    Content(String),
-    /// 本轮回复正常结束（用户停止也折算成 Done 做收尾清理）
-    Done,
-    /// 本轮回复失败，携带可展示的简述文本
-    Error(String),
-}
-
-/// 懒构建的 (client, 默认模型名) 缓存。
+/// 懒构建的客户端缓存。
 ///
-/// 连接池应跨多次发送复用，故 `Client` 建一次存起来；`model` 与它同源（来自
-/// 同一份 config），一并缓存避免二次读文件。
-type ClientCache = Arc<Mutex<Option<(Arc<Client>, String)>>>;
+/// 连接池应跨多次发送复用，故 `Client` 建一次存起来；默认模型名已折入
+/// `Client`，不再单独缓存。
+type ClientCache = Arc<Mutex<Option<Arc<Client>>>>;
 
 /// 思考展示态取值，与 `ui/app.slint` 中 `ChatMessage.tstate` 的注释约定一致
 const STATE_COLLAPSED: i32 = 0;
@@ -136,36 +123,36 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let history = snapshot_history(&current);
 
             // 配置缺失/损坏只影响本轮发送，以内联气泡反馈，不退出也不卡 UI
-            let (client, model) = match ensure_client(&cache) {
-                Ok(pair) => pair,
+            let client = match ensure_client(&cache) {
+                Ok(c) => c,
                 Err(msg) => {
                     append_part(&current, false, &format!("[配置错误] {msg}"));
                     return;
                 }
             };
-            // 登记该会话轮次：gen_id 递增 + 新取消令牌；事件按 (sid, gen_id) 路由回原会话
-            let (cancel_tx, cancel_rx) = oneshot::channel();
+            // 登记轮次（gen_id 递增）后投任务；回流事件打 (sid, gen_id) 标路由回原会话
             let gen_id = {
                 let mut runs = host.runs.borrow_mut();
                 let run = &mut runs[sid];
                 run.gen_id += 1;
-                run.cancel = Some(cancel_tx);
                 run.gen_id
             };
             window_weak.upgrade().unwrap().set_generating(true);
-            let req = Request {
-                model,
-                messages: history,
-                extra: thinking_extra(host.thinking_on.get()),
-            };
-            spawn_chat(
+            let run = RunRef { sid, gen_id };
+            let handle = client.spawn_turn(
                 &runtime,
-                client,
-                req,
-                RunRef { sid, gen_id },
-                &tx,
-                cancel_rx,
+                history,
+                TurnOptions {
+                    thinking: host.thinking_on.get(),
+                },
+                {
+                    let tx = tx.clone();
+                    move |event| {
+                        let _ = tx.send(StreamMsg { run, event });
+                    }
+                },
             );
+            host.runs.borrow_mut()[sid].cancel = Some(handle);
         });
     }
 
@@ -176,8 +163,8 @@ pub fn run() -> Result<(), slint::PlatformError> {
             let host = host.clone();
             move || {
                 let sid = host.current.get();
-                if let Some(tx) = host.runs.borrow_mut()[sid].cancel.take() {
-                    let _ = tx.send(()); // 任务内 future 被丢弃 → 连接即断
+                if let Some(handle) = host.runs.borrow_mut()[sid].cancel.take() {
+                    handle.cancel(); // 任务内请求 future 被丢弃 → 连接即断
                 }
                 if let Some(w) = window_weak.upgrade() {
                     w.set_generating(false);
@@ -214,7 +201,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
                 return;
             };
             for msg in rx.try_iter() {
-                let StreamMsg { run, kind } = msg;
+                let StreamMsg { run, event } = msg;
                 // 该会话已停止/重发（gen_id 前进过）：旧轮迟到事件一律丢弃
                 {
                     let runs = timer_host.runs.borrow();
@@ -226,17 +213,17 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     }
                 }
                 let model = timer_host.models.borrow()[run.sid].clone();
-                match kind {
-                    StreamKind::Reasoning(t) => append_part(&model, true, &t),
-                    StreamKind::Content(t) => append_part(&model, false, &t),
-                    StreamKind::Done => {
+                match event {
+                    TurnEvent::Reasoning(t) => append_part(&model, true, &t),
+                    TurnEvent::Content(t) => append_part(&model, false, &t),
+                    TurnEvent::Done => {
                         fold_tail(&model); // 兜底：纯思考回复也要收起
                         timer_host.runs.borrow_mut()[run.sid].cancel = None;
                         if run.sid == timer_host.current.get() {
                             window.set_generating(false);
                         }
                     }
-                    StreamKind::Error(e) => {
+                    TurnEvent::Error(e) => {
                         // 错误详情截断，防止超长网关响应体撑爆气泡
                         let brief: String = e.chars().take(300).collect();
                         append_part(&model, false, &format!("\n[出错] {brief}"));
@@ -279,10 +266,10 @@ struct Host {
 }
 
 /// 一次会话的生成簿记：`gen_id` 每次发送递增（旧轮迟到事件据此丢弃）；
-/// `cancel` 仅在该会话生成中为 `Some`。
+/// `cancel` 仅在该会话生成中为 `Some`（取出即 [`TurnHandle::cancel`]）。
 struct RunState {
     gen_id: u64,
-    cancel: Option<oneshot::Sender<()>>,
+    cancel: Option<TurnHandle>,
 }
 
 impl Host {
@@ -420,66 +407,15 @@ fn snapshot_history(messages: &Rc<VecModel<ChatMessage>>) -> Vec<Message> {
         .collect()
 }
 
-/// 取（必要时懒建）客户端与其默认模型；`Err` 携带可直接展示的文案。
-fn ensure_client(cache: &ClientCache) -> Result<(Arc<Client>, String), String> {
+/// 取（必要时懒建）客户端；`Err` 携带可直接展示的文案。
+/// 请求组装/取消编排已下沉至 [`Client::spawn_turn`](crate::ai::client::Client::spawn_turn)。
+fn ensure_client(cache: &ClientCache) -> Result<Arc<Client>, String> {
     let mut guard = cache.lock().unwrap();
     if guard.is_none() {
-        let cfg = Config::load().map_err(|e| format!("读取 config.toml 失败: {e}"))?;
-        let model = cfg.model.clone();
-        *guard = Some((Arc::new(Client::from_config(&cfg)), model));
+        let client = Client::load().map_err(|e| format!("读取 config.toml 失败: {e}"))?;
+        *guard = Some(Arc::new(client));
     }
-    let (client, model) = guard.as_ref().unwrap();
-    Ok((client.clone(), model.clone()))
-}
-
-/// 把一轮对话投给 tokio 后台任务（runtime 线程池，一轮一任务、多会话并行）：
-/// 端点族与流式方式由 `client.generate` 按配置分发，增量携带 `run` 定位回传，
-/// 收尾发 Done/Error；`cancel` 收到消息即中止——`select!` 丢弃请求 future，
-/// 连接随之关闭。取消本身折算成 Done，由 Timer 做统一收尾。
-///
-/// 任务与 UI 之间只有 `tx` 单向通道，不持有任何 Slint 句柄。
-fn spawn_chat(
-    runtime: &Arc<tokio::runtime::Runtime>,
-    client: Arc<Client>,
-    req: Request,
-    run: RunRef,
-    tx: &mpsc::Sender<StreamMsg>,
-    mut cancel: oneshot::Receiver<()>,
-) {
-    let tx_delta = tx.clone();
-    let tx_final = tx.clone();
-    runtime.spawn(async move {
-        let result = tokio::select! {
-            r = client.generate(&req, move |ev| {
-                let _ = tx_delta.send(StreamMsg {
-                    run,
-                    kind: match ev {
-                        StreamEvent::Reasoning(t) => StreamKind::Reasoning(t),
-                        StreamEvent::Content(t) => StreamKind::Content(t),
-                    },
-                });
-            }) => r,
-            // 停止按钮触发取消、或 Host 释放（进程退出）：均按干净收尾处理
-            _ = &mut cancel => Ok(()),
-        };
-        let _ = tx_final.send(StreamMsg {
-            run,
-            kind: match result {
-                Ok(()) => StreamKind::Done,
-                Err(e) => StreamKind::Error(e.to_string()),
-            },
-        });
-    });
-}
-
-/// 思考模式的请求扩展字段：开→`None`（不发字段，跟随模型/网关默认行为）；
-/// 关→`reasoning.effort=none`（经 `extra` 平铺透传，两家 OpenAI 兼容端点同字段）。
-fn thinking_extra(on: bool) -> Option<serde_json::Value> {
-    if on {
-        None
-    } else {
-        Some(serde_json::json!({ "reasoning": { "effort": "none" } }))
-    }
+    Ok(guard.as_ref().unwrap().clone())
 }
 
 /// 把一段文本增量并入"当前回答"：尾部是 assistant 气泡则合并，否则新开一条。
@@ -548,12 +484,5 @@ mod tests {
             format!("{}…", "字".repeat(24))
         );
         assert_eq!(derive_title("   \n  ").as_str(), NEW_TITLE);
-    }
-
-    #[test]
-    fn thinking_extra_only_off_emits_field() {
-        assert!(thinking_extra(true).is_none());
-        let off = thinking_extra(false).expect("关闭思考应有扩展字段");
-        assert_eq!(off["reasoning"]["effort"], "none");
     }
 }

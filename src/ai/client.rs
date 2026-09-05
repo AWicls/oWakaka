@@ -3,6 +3,7 @@
 //! 默认入口 [`Client::generate`] 按配置 `api`（缺省 `chat`）与
 //! `stream`（缺省 `true`）分发。各端点族的请求与 SSE 解析按族拆分：
 //! 实现见 `client/chat.rs` 与 `client/responses.rs`（均为 [`Client`] 的 `impl` 块），
+//! 一轮对话的投送/取消见 `client/turn.rs`（[`Client::spawn_turn`]），
 //! 本文件只保留共享类型与分发入口。
 //!
 //! 端到端用法，演示真实路径"配置文件 → `load_toml` → `Client`"
@@ -46,6 +47,9 @@
 
 mod chat;
 mod responses;
+mod turn;
+
+pub use turn::{TurnEvent, TurnHandle, TurnOptions};
 
 use std::time::Duration;
 
@@ -123,6 +127,8 @@ pub struct Client {
     /// 已去掉末尾斜杠的 API 根地址
     base_url: String,
     api_key: String,
+    /// 配置的默认模型名，[`spawn_turn`](Self::spawn_turn) 组装请求时使用
+    model: String,
     /// 配置的端点族，决定 [`generate`](Self::generate) 分发去向
     api: Api,
     /// 配置的流式开关，各端点族入口消费
@@ -130,6 +136,12 @@ pub struct Client {
 }
 
 impl Client {
+    /// 读默认凭据文件（`config.toml`）构建客户端：`Config::load` +
+    /// [`from_config`](Self::from_config) 一步到位，错误原样上抛供调用方呈现。
+    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Self::from_config(&Config::load()?))
+    }
+
     /// 由配置构建客户端。`base_url` 末尾多余的 `/` 会被归一化。
     pub fn from_config(cfg: &Config) -> Self {
         Self {
@@ -140,6 +152,7 @@ impl Client {
                 .unwrap_or_default(),
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             api_key: cfg.api_key.clone(),
+            model: cfg.model.clone(),
             api: cfg.api,
             stream: cfg.stream,
         }
