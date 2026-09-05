@@ -708,10 +708,10 @@ export component SettingsPage inherits Rectangle {
                                         color: Theme.p.textMuted;
                                         font-size: 12px;
                                     }
-                                    // 框高显式随行数算（Rectangle preferred 不从子 layout 反推，
-                                    // 定高才能传导进外层 viewport 恢复滚动）：58 行高 + 2 间距
+                                    // 框高封顶 300px（约 5 行），超出部分框内 ScrollView 自滚
+                                    //（Rectangle preferred 不反推子 layout，高度须显式算：行高 58+间距 2）
                                     Rectangle {
-                                        height: Math.max(90px, root.prov-models.length * 60px + 8px);
+                                        height: Math.max(90px, Math.min(root.prov-models.length * 60px + 8px, 300px));
                                         border-radius: 8px;
                                         border-width: 1px;
                                         border-color: Theme.p.inputBorder;
@@ -726,20 +726,26 @@ export component SettingsPage inherits Rectangle {
                                             wrap: word-wrap;
                                             width: parent.width - 16px;
                                         }
-                                        VerticalLayout {
-                                            padding: 4px;
-                                            spacing: 2px;
-                                            for m in root.prov-models : ModelCard {
-                                                mdl: m;
-                                                editing: root.mdl-edit != "" && root.mdl-edit == m.id;
-                                                edit-requested => { root.mdl-edit = m.id; }
-                                                edit-done => {
-                                                    root.mdl-edit = "";
-                                                    root.prov-model-commit(m.id);
+                                        ScrollView {
+                                            width: parent.width;
+                                            height: parent.height;
+                                            viewport-width: self.visible-width;
+                                            viewport-height: root.prov-models.length * 60px + 6px;
+                                            VerticalLayout {
+                                                padding: 4px;
+                                                spacing: 2px;
+                                                for m in root.prov-models : ModelCard {
+                                                    mdl: m;
+                                                    editing: root.mdl-edit != "" && root.mdl-edit == m.id;
+                                                    edit-requested => { root.mdl-edit = m.id; }
+                                                    edit-done => {
+                                                        root.mdl-edit = "";
+                                                        root.prov-model-commit(m.id);
+                                                    }
+                                                    alias-changed(a) => { root.prov-model-alias(m.id, a); }
+                                                    cap(which, on) => { root.prov-model-cap(m.id, which, on); }
+                                                    remove-request => { root.prov-model-removed(m.id); }
                                                 }
-                                                alias-changed(a) => { root.prov-model-alias(m.id, a); }
-                                                cap(which, on) => { root.prov-model-cap(m.id, which, on); }
-                                                remove-request => { root.prov-model-removed(m.id); }
                                             }
                                         }
                                     }
