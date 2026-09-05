@@ -133,6 +133,9 @@ export component AppWindow inherits Window {
     // 主三框与设置页整页互斥切换：if-block 销毁重建，对话模型在 Rust 侧
     // （Host 簿记 + 窗口属性）不受影响，生成中切页事件照常回流
     if !root.settings-page : HorizontalLayout {
+        // 多子元素组件里 if-block 不自动撑满：显式全窗，否则底部露馅（"大下巴"）
+        width: root.width;
+        height: root.height;
         padding: 10px;
         spacing: 0;
 
@@ -313,6 +316,8 @@ export component AppWindow inherits Window {
 
     // —— 设置整页：与主三框互斥切换，进入即重建；提供商页双向链到本窗口属性 ——
     if root.settings-page : SettingsPage {
+        width: root.width;
+        height: root.height;
         provs: root.provs;
         prov-sel <=> root.prov-sel;
         prov-name <=> root.prov-name;
