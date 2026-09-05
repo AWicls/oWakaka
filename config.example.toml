@@ -1,24 +1,22 @@
-# 凭据模板：复制为 config.toml（正式代码用）或 config.test.toml（#[ignore] 测试用），两者均已被 git 忽略
+# 凭据文件模板：复制为 config.toml（正式代码用，已被 git 忽略）
 #
-# DB-2 起：运行配置（provider/base_url/model/api/stream/[models] 别名）存
-# SQLite（data/owakaka.db 的 kv 表 "config" 键），本文件只留密钥。
-# 老式全量 config.toml 仍兼容——DB 无配置时作回落读取源，首次保存设置/
-# 切换模型即自动完成拆分迁移（其余字段从文件消失，进 DB）。
+# Step A 起：提供商档案（地址/后缀/接入方案/模型别名）全部存 SQLite
+# （data/owakaka.db 的 kv 表 "providers" 键），本文件只留 [keys] 表——
+# 提供商 id → API 密钥。条目在应用「设置 → 提供商」页管理；库里有配置、
+# 文件里留凭据，DB 随便备份导出。老式单配置首次启动自动迁移进此结构。
 
-api_key = "sk-..."
+[keys]
+# p1 = "sk-..."
 
-# ———— 以下为旧字段：正式配置由 UI 设置弹窗写入 DB，无需手填 ————
-# config.test.toml 需要全量格式（测试直读文件、不碰 DB），字段语义如下：
+# ════════════════════════════════════════════════════════════════
+# config.test.toml（#[ignore] 真实网关测试用）另行保持【全量格式】：
+# 测试直读文件、不碰 DB。复制下列字段填写：
 #
-# provider（可选，缺省 "custom"）：
-#   "custom"      = 通用 OpenAI 兼容网关：base_url 必填，api 接口族自由配
-#   "xiaomi_mimo" = 小米 MiMo 定制：base_url 缺省用官方端点，接口族锁死 responses
-# provider = "custom"
-#
-# base_url = "https://api.openai.com/v1"   # provider=custom 必填；写则覆盖定制提供商内置端点
-# model = "gpt-4o-mini"                    # 当前激活模型（UI 切换回写）
-# api = "chat"                             # 缺省 "chat"；写 "responses" 启用新接口（仅 custom 可配）
-# stream = true                            # 缺省 true 流式；false 整段返回
-#
-# [models]                                 # 别名表：键 = 模型 ID，值 = UI 显示名
-# "gpt-4o-mini" = "轻量主力"
+#   base_url = "https://api.openai.com/v1"   # 必填
+#   api_key  = "sk-..."                      # 必填
+#   model    = "gpt-4o-mini"                 # 必填
+#   provider = "custom"                      # 可选：custom | xiaomi_mimo
+#   api      = "chat"                        # 可选：chat | responses
+#   stream   = true                          # 可选
+#   [models]                                 # 可选：别名表 "模型ID" = "显示名"
+# ════════════════════════════════════════════════════════════════

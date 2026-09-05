@@ -1,14 +1,17 @@
-//! 运行配置与通用 TOML 配置读写工具。
+//! 运行配置视图与通用 TOML 配置读写工具。
 //!
-//! # 存储拆分（DB-2）
-//! 正式配置的**设置 JSON**（provider/base_url/model/api/stream/[models] 别名）
-//! 存 SQLite [`kv`](crate::db::Db::kv_set) 表（键 `config`），`config.toml` 只
-//! 剩 `api_key`——**库里有配置、文件里留凭据**：备份/导出 DB 不泄密。
-//! 老式全量 `config.toml` 仍兼容：DB 无配置时作为回落读取源，首次
-//! [`Config::save`] 自动完成拆分迁移。
+//! # 存储格局（Step A 起）
+//! 多提供商档案整包 JSON 存 SQLite kv 表键 `providers`（见 [`providers`](super::providers)），
+//! 密钥按提供商存 `config.toml` 的 `[keys]` 表——**库里有配置、文件里留凭据**。
+//! [`Config`] 自此退化为**运行时扁平视图**：[`Config::load`] 把"使用中条目 +
+//! 其密钥"摊平成下游（`Client`、模型下拉）沿用的形状；不再提供整包 save
+//! （写路径归 `Providers` 的专用操作，base 拼接串永不回写条目）。
+//! 旧单配置（kv `config` / 全量 toml）由
+//! [`Providers::migrate_legacy`](super::providers::Providers::migrate_legacy)
+//! 启动时一次性全量迁移，旧路径不留。
 //!
 //! 凭据文件约定（均含密钥、已被 git 忽略，模板见项目根 `config.example.toml`）：
-//! - `config.toml`：正式代码使用，经 [`Config::load`]（kv + 密钥两路组装）
+//! - `config.toml`：正式代码使用，经 [`Config::load`]（providers + `[keys]` 组装）
 //! - `config.test.toml`：需真实凭据的测试使用（**保持全量 TOML**，[`load_toml`]
 //!   直读不碰 DB；`#[ignore]`，`cargo test -- --ignored`）
 //!
@@ -154,40 +157,38 @@ pub struct Config {
     pub models: BTreeMap<String, String>,
 }
 
-/// 本地 `config.toml` 的唯一内容：DB-2 起设置进库、凭据留在文件。
+/// `config.toml` 的全部内容：Step A 起为 `[keys]`（提供商 id → 密钥）。
 ///
-/// 反序列化容忍多余字段 = 老全量 config.toml 与迁移前文件都能直读密钥。
+/// 反序列化容忍多余字段 = 迁移前的老全量 / DB-2 单密钥文件都能被
+/// [`migrate_legacy`](super::providers::Providers::migrate_legacy) 读出密钥。
 ///
 /// ```
 /// use o_wakaka::ai::config::Secrets;
 ///
-/// // 从老全量 toml 提取密钥（其余字段忽略）
-/// let s: Secrets = toml::from_str("base_url=\"u\"\napi_key=\"sk-x\"\nmodel=\"m\"\n").unwrap();
-/// assert_eq!(s.api_key, "sk-x");
-/// // 缺密钥字段不炸（空串由 UI 保存路径提示补填）
+/// // [keys] 表：多提供商各一条
+/// let s: Secrets = toml::from_str("[keys]\np1 = \"sk-a\"\np2 = \"sk-b\"\n").unwrap();
+/// assert_eq!(s.keys["p1"], "sk-a");
+/// // 空文件不炸
 /// let e: Secrets = toml::from_str("").unwrap();
-/// assert!(e.api_key.is_empty());
-/// // Debug 恒脱敏（同 Config 纪律）
-/// assert!(!format!("{s:?}").contains("sk-x"));
+/// assert!(e.keys.is_empty());
+/// // Debug 恒脱敏：不得出现任何密钥值
+/// assert!(!format!("{s:?}").contains("sk-a"));
 /// ```
 #[derive(Serialize, Deserialize, Default)]
 pub struct Secrets {
-    /// Bearer 鉴权密钥
-    #[serde(default)]
-    pub api_key: String,
+    /// 提供商 id → 该提供商的密钥
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, String>,
 }
 
-/// 手动实现：恒脱敏，防 `{:?}`/日志/panic 泄漏密钥（与 [`Config`] 同纪律）。
+/// 手动实现：密钥值恒脱敏，防 `{:?}`/日志/panic 泄漏（与 [`Config`] 同纪律）。
 impl std::fmt::Debug for Secrets {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Secrets")
-            .field("api_key", &"[REDACTED]")
+            .field("keys", &format!("[{} 条已隐藏]", self.keys.len()))
             .finish()
     }
 }
-
-/// 设置 JSON 在 [`kv`](crate::db::Db::kv_get) 表中的键名。
-const KV_KEY: &str = "config";
 
 /// 手动实现：`api_key` 恒为脱敏占位，防止 `{:?}`/日志/panic 输出泄漏密钥。
 impl std::fmt::Debug for Config {
@@ -205,8 +206,7 @@ impl std::fmt::Debug for Config {
 }
 
 impl Config {
-    /// 读运行配置（两路组装）：设置 JSON 取 DB kv `config` 键，密钥取
-    /// `config.toml`（相对工作目录）；DB 无配置时回落读老式全量 toml。
+    /// 读运行配置视图（使用中提供商 + 其密钥摊平；相对工作目录的 `config.toml`）。
     ///
     /// 需真实凭据的测试请改用 [`load_toml`] 直读全量 `config.test.toml`（不碰 DB）。
     pub fn load(db: &Db) -> Result<Self, Box<dyn Error>> {
@@ -215,7 +215,7 @@ impl Config {
 
     /// [`load`](Self::load) 的路径参数化版（doctest 自给自足用）。
     ///
-    /// 回落与迁移、密钥不进 DB、拆分保存后往返，全部离线可验：
+    /// 端到端：providers 整包 + `[keys]` → 视图（地址已拼合、密钥已装配）：
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -223,48 +223,28 @@ impl Config {
     /// use o_wakaka::db::Db;
     ///
     /// let db = Db::open_in_memory()?;
-    /// let path = std::env::temp_dir().join("o_wakaka_cfgmerge_doctest.toml");
+    /// let path = std::env::temp_dir().join("o_wakaka_view_doctest.toml");
+    /// db.kv_set("providers", r#"{"active":"p1","active_model":"gpt-4o","list":[
+    ///   {"id":"p1","kind":"custom","name":"主站","base_url":"https://api.x/v1",
+    ///    "url_suffix":"/proxy","api":"chat","stream":true,
+    ///    "models":{"gpt-4o":"主力"},"deleted":false}]}"#)?;
+    /// std::fs::write(&path, "[keys]\np1 = \"sk-view\"\n")?;
     ///
-    /// // 老全量 toml：DB 空时回落直读，密钥即来自文件
-    /// std::fs::write(&path, "base_url=\"u\"\napi_key=\"sk-old\"\nmodel=\"m\"\n")?;
     /// let cfg = Config::load_at(&db, &path)?;
-    /// assert_eq!((cfg.base_url.as_str(), cfg.api_key.as_str(), cfg.model.as_str()), ("u", "sk-old", "m"));
-    ///
-    /// // save：设置进 DB（不含密钥），toml 瘦身为仅 api_key —— 首次保存即完成迁移
-    /// cfg.save_at(&db, &path)?;
-    /// assert!(!db.kv_get("config")?.unwrap().contains("sk-old"));
-    /// assert_eq!(std::fs::read_to_string(&path)?.trim(), "api_key = \"sk-old\"");
-    ///
-    /// // "重启"后一切如旧：字段读自 DB，密钥读自瘦身文件
-    /// let back = Config::load_at(&db, &path)?;
-    /// assert_eq!((back.base_url.as_str(), back.api_key.as_str(), back.model.as_str()), ("u", "sk-old", "m"));
     /// std::fs::remove_file(&path).ok();
+    /// assert_eq!(cfg.base_url, "https://api.x/v1/proxy"); // 拼接在装配时完成
+    /// assert_eq!((cfg.api_key.as_str(), cfg.model.as_str()), ("sk-view", "gpt-4o"));
+    /// assert_eq!(cfg.models["gpt-4o"], "主力");
     /// # Ok(()) }
     /// ```
     pub fn load_at(db: &Db, secrets_path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        let mut cfg: Config = match db.kv_get(KV_KEY)? {
-            Some(json) => serde_json::from_str(&json)?,
-            None => load_toml(secrets_path.as_ref())?,
-        };
-        cfg.api_key = load_toml::<Secrets>(secrets_path)?.api_key;
-        Ok(cfg)
-    }
-
-    /// 保存配置：设置 JSON 写 DB kv（恒不含密钥），`config.toml` 重写为
-    /// 仅 [`Secrets`]——对老全量文件即完成一次性拆分迁移（幂等）。
-    pub fn save(&self, db: &Db) -> Result<(), Box<dyn Error>> {
-        self.save_at(db, "config.toml")
-    }
-
-    /// [`save`](Self::save) 的路径参数化版（doctest 自给自足用）。
-    pub fn save_at(&self, db: &Db, secrets_path: impl AsRef<Path>) -> Result<(), Box<dyn Error>> {
-        db.kv_set(KV_KEY, &serde_json::to_string(self)?)?;
-        store_toml(
-            &Secrets {
-                api_key: self.api_key.clone(),
-            },
-            secrets_path,
-        )
+        use super::providers::Providers;
+        let ps = Providers::load(db)?;
+        if ps.active_entry().is_none() {
+            return Err("无使用中提供商，请在设置 → 提供商 中添加并选用".into());
+        }
+        let secrets: Secrets = load_toml(secrets_path)?;
+        Ok(ps.view(&secrets))
     }
 
     /// 生效根地址：显式写的 `base_url` 优先，其次提供商内置默认；空 = 未配置。

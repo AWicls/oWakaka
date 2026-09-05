@@ -39,8 +39,9 @@ use std::{
 
 use crate::ai::{
     client::{Client, TurnEvent, TurnOptions, TurnPersona},
-    config::Config,
+    config::{Api, Config, Secrets, load_toml, store_toml},
     provider::Provider,
+    providers::{Providers, fmt_aliases, join_url, parse_aliases},
 };
 use crate::db::Db;
 use slint::{SharedString, Timer, TimerMode, VecModel};
@@ -56,10 +57,11 @@ slint::include_modules!();
 /// `Client`，不再单独缓存。
 type ClientCache = Arc<Mutex<Option<Arc<Client>>>>;
 
-/// 后台回传主线程的消息（Timer 主线程排空）：对话轮事件与模型清单异步结果
+/// 后台回传主线程的消息（Timer 主线程排空）：对话轮事件、模型清单与连通测试结果
 enum UiMsg {
     Turn(StreamMsg),
     Models(Result<Vec<String>, String>),
+    ProvTest(SharedString),
 }
 
 /// 模型切换下拉的 UI 状态：数据源、激活 ID、别名表（config `[models]`）；
@@ -165,68 +167,173 @@ impl ModelsState {
         }
     }
 
-    /// 把激活模型写回设置（kv 配置 JSON）的 `model` 字段，其余字段原样保留
+    /// 把激活模型写回 providers 整包的 active_model 字段
     fn persist_model(&self, id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut cfg = Config::load(&self.db)?;
-        cfg.model = id.to_string();
-        cfg.save(&self.db)
+        Providers::set_active_model(&self.db, id)
     }
 }
 
-/// 设置页保存：设置字段（stream/api/[models] 等原样保留）+ 角色设定
-/// （助手提示词/温度、用户人设 → persona 活跃行）；校验不过不落盘；
-/// 成功则失效客户端缓存并同步模型下拉（允许重拉远端清单）
-// 参数 = Slint saved 回调直传 + 共享状态，拆包反而绕
-#[allow(clippy::too_many_arguments)]
-fn save_settings(
-    p: i32,
-    url: &str,
-    key: &str,
-    model: &str,
-    sys_prompt: &str,
-    user_persona: &str,
-    temp: &str,
-    db: &Db,
-    cache: &ClientCache,
-    models: &ModelsState,
-    window: &AppWindow,
-) -> SharedString {
+/// 设置页「保存」= 仅角色设定两页（助手提示词/温度、用户人设 → persona 活跃行）。
+/// 提供商字段由提供商页即时落盘，不经此；温度非法直接回文案不落盘。
+fn save_personas(db: &Db, sys_prompt: &str, user_persona: &str, temp: &str) -> SharedString {
     let temperature = match parse_temperature(temp) {
         Ok(v) => v,
         Err(msg) => return msg.into(),
     };
-    let mut cfg = match Config::load(db) {
-        Ok(cfg) => cfg,
-        Err(e) => return format!("读取配置失败: {e}").into(),
-    };
-    cfg.provider = if p == 1 {
-        Provider::XiaomiMimo
-    } else {
-        Provider::Custom
-    };
-    cfg.base_url = url.trim().to_string();
-    if !key.trim().is_empty() {
-        cfg.api_key = key.trim().to_string(); // 空密钥 = 保持已存值
-    }
-    cfg.model = model.trim().to_string();
-    if let Err(e) = cfg.validate() {
-        return e.into();
-    }
-    if let Err(e) = cfg.save(db) {
-        return format!("保存失败: {e}").into();
-    }
-    let personas = db
+    let r = db
         .upsert_active_persona("assistant", "默认助手", sys_prompt.trim(), temperature)
         .and_then(|()| db.upsert_active_persona("user", "默认人设", user_persona.trim(), None));
-    if let Err(e) = personas {
-        return format!("设置已存，角色设定保存失败: {e}").into();
+    match r {
+        Ok(()) => "已保存，下一次发送生效".into(),
+        Err(e) => format!("保存失败: {e}").into(),
     }
-    *cache.lock().unwrap() = None; // 下一次发送按新配置重建客户端
-    *models.active.borrow_mut() = cfg.model.clone();
-    models.fetched.set(false);
-    models.rebuild(None);
-    models.apply(window);
-    "已保存，下一次发送生效".into()
+}
+
+// —— 提供商页装配（Step A：providers 整包即时读写，密钥恒不下 UI） ——
+
+/// 表单 api 序号 ↔ 枚举（0 chat | 1 responses）
+fn api_of(i: i32) -> Api {
+    if i == 1 { Api::Responses } else { Api::Chat }
+}
+
+fn api_to_i(api: Api) -> i32 {
+    match api {
+        Api::Chat => 0,
+        Api::Responses => 1,
+    }
+}
+
+/// 重注入提供商列表与详情。select 为空 = 维持当前选中；选中失效回落 active。
+/// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
+fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
+    let ps = Providers::load(db).unwrap_or_default();
+    let rows: Vec<ProvRow> = ps
+        .list
+        .iter()
+        .map(|e| ProvRow {
+            id: e.id.as_str().into(),
+            name: e.name.as_str().into(),
+            kind: e.kind.display_name().into(),
+            active: e.id == ps.active,
+            deleted: e.deleted,
+        })
+        .collect();
+    window.set_provs(Rc::new(VecModel::from(rows)).into());
+    let mut sel = select.to_string();
+    if sel.is_empty() {
+        sel = window.get_prov_sel().to_string();
+    }
+    if ps.find(&sel).is_none() {
+        sel = ps.active.clone();
+    }
+    window.set_prov_sel(sel.as_str().into());
+    let Some(e) = ps.find(&sel) else {
+        // 零可用条目：表单整体清空，仅剩新增入口
+        window.set_prov_name("".into());
+        window.set_prov_base("".into());
+        window.set_prov_suffix("".into());
+        window.set_prov_key("".into());
+        window.set_prov_api(0);
+        window.set_sel_kind("".into());
+        window.set_sel_locked(false);
+        window.set_sel_active(false);
+        window.set_sel_deleted(false);
+        window.set_prov_aliases("".into());
+        return;
+    };
+    window.set_prov_name(e.name.as_str().into());
+    window.set_prov_base(e.base_url.as_str().into());
+    window.set_prov_suffix(e.url_suffix.as_str().into());
+    window.set_prov_key("".into());
+    window.set_prov_api(api_to_i(e.kind.locked_api().or(e.api).unwrap_or_default()));
+    window.set_sel_kind(e.kind.display_name().into());
+    window.set_sel_locked(e.kind.locked_api().is_some());
+    window.set_sel_active(sel == ps.active);
+    window.set_sel_deleted(e.deleted);
+    window.set_prov_aliases(fmt_aliases(&e.models).into());
+}
+
+/// 「完成」：表单写回对应条目（kind/锁定族不信任 UI 传入）；密钥框非空才更新 `[keys]`。
+fn prov_save(db: &Db, window: &AppWindow) -> SharedString {
+    let id = window.get_prov_sel().to_string();
+    let ps = match Providers::load(db) {
+        Ok(ps) => ps,
+        Err(e) => return format!("读取失败: {e}").into(),
+    };
+    let Some(cur) = ps.find(&id).cloned() else {
+        return "条目不存在，请从列表重新选择".into();
+    };
+    if cur.deleted {
+        return "已删除条目：恢复后才能编辑".into();
+    }
+    let mut e = cur;
+    e.name = window.get_prov_name().trim().to_string();
+    if e.name.is_empty() {
+        e.name = e.kind.display_name().to_string();
+    }
+    e.base_url = window.get_prov_base().trim().to_string();
+    e.url_suffix = window.get_prov_suffix().trim().to_string();
+    e.api = match e.kind.locked_api() {
+        Some(locked) => Some(locked),
+        None => Some(api_of(window.get_prov_api())),
+    };
+    if e.kind == Provider::Custom && join_url(&e.base_url, &e.url_suffix).is_empty() {
+        return "自定义提供商必须填基础地址".into();
+    }
+    e.models = parse_aliases(&window.get_prov_aliases());
+    if let Err(err) = Providers::save_entry(db, &e) {
+        return format!("保存失败: {err}").into();
+    }
+    let key = window.get_prov_key().trim().to_string();
+    if !key.is_empty() {
+        let mut secrets: Secrets = load_toml("config.toml").unwrap_or_default();
+        secrets.keys.insert(id.clone(), key);
+        if let Err(err) = store_toml(&secrets, "config.toml") {
+            return format!("设置已存，密钥写入失败: {err}").into();
+        }
+    }
+    prov_inject(db, window, &id);
+    "完成，已保存".into()
+}
+
+/// 用表单当前值（未保存也可测）组装临时视图；缺参则写 prov-status 回 `None`。
+fn prov_test_config(db: &Db, window: &AppWindow) -> Option<Config> {
+    let id = window.get_prov_sel().to_string();
+    let ps = Providers::load(db).ok()?;
+    let entry = ps.find(&id)?;
+    let kind = entry.kind;
+    let base_in = window.get_prov_base().trim().to_string();
+    let base = if base_in.is_empty() {
+        kind.default_base_url().unwrap_or("").to_string()
+    } else {
+        base_in
+    };
+    let full = join_url(&base, window.get_prov_suffix().trim());
+    if full.is_empty() {
+        window.set_prov_status("请先填写基础地址".into());
+        return None;
+    }
+    let key_in = window.get_prov_key().trim().to_string();
+    let key = if key_in.is_empty() {
+        load_toml::<Secrets>("config.toml")
+            .ok()
+            .and_then(|s| s.keys.get(&id).cloned())
+            .unwrap_or_default()
+    } else {
+        key_in
+    };
+    Some(Config {
+        provider: kind,
+        base_url: full,
+        api_key: key,
+        model: String::new(),
+        api: Some(
+            kind.locked_api()
+                .unwrap_or_else(|| api_of(window.get_prov_api())),
+        ),
+        stream: true,
+        models: Default::default(),
+    })
 }
 
 /// UI 主入口：构建窗口、接线交互、运行 Slint 事件循环直到窗口关闭。
@@ -239,6 +346,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
         eprintln!("打开 data/owakaka.db 失败，本运行不持久化: {e}");
         Db::open_in_memory().expect("内存库也开不了就没法跑了")
     }));
+    // 旧单配置一次性全量迁移（幂等）；失败仅记日志不阻断启动（下次再试）
+    if let Err(e) = Providers::migrate_legacy(&db, "config.toml") {
+        eprintln!("旧配置迁移失败: {e}");
+    }
     let host = Host::new(db.clone());
     window.set_sessions(host.items.clone().into());
     window.set_messages(host.active_model().into());
@@ -403,29 +514,17 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
     }
 
-    // —— 设置整页：进入注入 config 初值；保存=校验落盘 + 失效客户端缓存 + 同步模型态 ——
+    // —— 设置整页：进入注入提供商档案 + persona 初值；保存 = persona 两页 ——
     {
         window.on_settings_requested({
             let window_weak = window.as_weak();
-            let cache = cache.clone();
             let db = db.clone();
             move || {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                // 读不到配置也照常进设置页（字段空白），保存时报错引导
-                if let Ok(cfg) = Config::load(&db) {
-                    w.set_cfg_provider(if cfg.provider == Provider::XiaomiMimo {
-                        1
-                    } else {
-                        0
-                    });
-                    w.set_cfg_base_url(cfg.base_url.into());
-                    w.set_cfg_api_key(cfg.api_key.into());
-                    w.set_cfg_model(cfg.model.into());
-                } else {
-                    *cache.lock().unwrap() = None;
-                }
+                prov_inject(&db, &w, "");
+                w.set_prov_status(SharedString::default());
                 // 角色设定初值：persona 活跃行（读不到/未设定 = 空白 + 温度空串）
                 if let Ok(Some(a)) = db.active_persona("assistant") {
                     w.set_cfg_system_prompt(a.system_prompt.into());
@@ -452,28 +551,175 @@ pub fn run() -> Result<(), slint::PlatformError> {
         });
         window.on_settings_saved({
             let window_weak = window.as_weak();
-            let cache = cache.clone();
-            let models = models.clone();
             let db = db.clone();
-            move |p, url, key, model, sys_prompt, user_persona, temp| {
+            move |sys_prompt, user_persona, temp| {
                 let Some(w) = window_weak.upgrade() else {
                     return;
                 };
-                let status = save_settings(
-                    p,
-                    &url,
-                    &key,
-                    &model,
-                    &sys_prompt,
-                    &user_persona,
-                    &temp,
-                    &db,
-                    &cache,
-                    &models,
-                    &w,
-                );
-                w.set_cfg_status(status.clone());
+                let status = save_personas(&db, &sys_prompt, &user_persona, &temp);
+                w.set_cfg_status(status);
                 // 整页设置不自动跳回，留在本页回显成功/失败；用户点「返回」退出
+            }
+        });
+    }
+
+    // —— 提供商页：列表/详情即时读写 providers 整包（Step A 骨架） ——
+    {
+        window.on_prov_created({
+            let window_weak = window.as_weak();
+            let db = db.clone();
+            move |kind_i| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let kind = if kind_i == 1 {
+                    Provider::XiaomiMimo
+                } else {
+                    Provider::Custom
+                };
+                match Providers::create(&db, kind) {
+                    Ok(id) => prov_inject(&db, &w, &id),
+                    Err(e) => w.set_prov_status(format!("新增失败: {e}").into()),
+                }
+            }
+        });
+        window.on_prov_selected({
+            let window_weak = window.as_weak();
+            let db = db.clone();
+            move |id| {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                prov_inject(&db, &w, &id);
+                w.set_prov_status(SharedString::default());
+            }
+        });
+        window.on_prov_used({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let id = w.get_prov_sel().to_string();
+                match Providers::set_active(&db, &id) {
+                    Ok(()) => {
+                        *cache.lock().unwrap() = None; // 下一次发送即用新提供商
+                        prov_inject(&db, &w, &id);
+                        w.set_prov_status("已切换，下一次发送生效".into());
+                    }
+                    Err(e) => w.set_prov_status(format!("切换失败: {e}").into()),
+                }
+            }
+        });
+        window.on_prov_saved({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let status = prov_save(&db, &w);
+                *cache.lock().unwrap() = None; // 编辑可能改了使用中的条目，重建客户端
+                w.set_prov_status(status);
+            }
+        });
+        window.on_prov_deleted({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let id = w.get_prov_sel().to_string();
+                if id.is_empty() {
+                    return;
+                }
+                match Providers::soft_delete(&db, &id) {
+                    Ok(()) => {
+                        *cache.lock().unwrap() = None;
+                        prov_inject(&db, &w, &id); // 留在原条目看"已删除"态
+                    }
+                    Err(e) => w.set_prov_status(format!("删除失败: {e}").into()),
+                }
+            }
+        });
+        window.on_prov_restored({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let id = w.get_prov_sel().to_string();
+                if id.is_empty() {
+                    return;
+                }
+                match Providers::restore(&db, &id) {
+                    Ok(()) => {
+                        *cache.lock().unwrap() = None;
+                        prov_inject(&db, &w, &id);
+                    }
+                    Err(e) => w.set_prov_status(format!("恢复失败: {e}").into()),
+                }
+            }
+        });
+        window.on_prov_purged({
+            let window_weak = window.as_weak();
+            let cache = cache.clone();
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let id = w.get_prov_sel().to_string();
+                if id.is_empty() {
+                    return;
+                }
+                match Providers::purge(&db, "config.toml", &id) {
+                    Ok(()) => {
+                        *cache.lock().unwrap() = None;
+                        prov_inject(&db, &w, ""); // 条目已没了，回注入兜底选中
+                        w.set_prov_status("已彻底删除".into());
+                    }
+                    Err(e) => w.set_prov_status(format!("彻底删除失败: {e}").into()),
+                }
+            }
+        });
+        window.on_prov_tested({
+            let window_weak = window.as_weak();
+            let runtime = runtime.clone();
+            let tx = tx.clone();
+            let db = db.clone();
+            move || {
+                let Some(w) = window_weak.upgrade() else {
+                    return;
+                };
+                let Some(cfg) = prov_test_config(&db, &w) else {
+                    return; // 文案已写 prov-status
+                };
+                w.set_prov_status("测试连接中…".into());
+                let client = Client::from_config(&cfg);
+                let tx = tx.clone();
+                runtime.spawn(async move {
+                    let t = std::time::Instant::now();
+                    let msg = match client.list_models().await {
+                        Ok(ids) => format!(
+                            "✓ 连通：{} 个模型，{} ms",
+                            ids.len(),
+                            t.elapsed().as_millis()
+                        ),
+                        Err(e) => {
+                            let brief: String = e.to_string().chars().take(160).collect();
+                            format!("✕ 连接失败: {brief}")
+                        }
+                    };
+                    let _ = tx.send(UiMsg::ProvTest(msg.into()));
+                });
             }
         });
     }
@@ -507,6 +753,10 @@ pub fn run() -> Result<(), slint::PlatformError> {
                     UiMsg::Models(Err(e)) => {
                         eprintln!("拉取远端模型清单失败: {e}");
                         timer_models.fetched.set(false);
+                        continue;
+                    }
+                    UiMsg::ProvTest(msg) => {
+                        window.set_prov_status(msg);
                         continue;
                     }
                 };

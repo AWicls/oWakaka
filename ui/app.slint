@@ -9,10 +9,10 @@ import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
 import { InputArea, ModelItem } from "input.slint";
-import { SettingsPage } from "settings.slint";
+import { SettingsPage, ProvRow } from "settings.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct
-export { ChatMessage, SessionItem, ModelItem }
+export { ChatMessage, SessionItem, ModelItem, ProvRow }
 
 export component AppWindow inherits Window {
     title: "oWakaka";
@@ -29,11 +29,29 @@ export component AppWindow inherits Window {
     in property <[ModelItem]> models; // 模型下拉：config 别名 ∪ 远端 /models（Rust 合并）
     in property <string> model-label; // 当前激活模型显示名
     in property <bool> settings-page; // 设置整页开关（true = 显示设置页，主三框整体切换）
-    // 设置页初值：Rust 打开时从 DB（设置 kv + persona）读取注入
-    in property <int> cfg-provider;
-    in property <string> cfg-base-url;
-    in property <string> cfg-api-key;
-    in property <string> cfg-model;
+    // —— 提供商页状态（providers 整包视图；Rust 注入/回注，密钥不下 UI） ——
+    in property <[ProvRow]> provs;
+    in-out property <string> prov-sel;
+    in-out property <string> prov-name;
+    in-out property <string> prov-base;
+    in-out property <string> prov-suffix;
+    in-out property <string> prov-key;
+    in-out property <int> prov-api;
+    in property <string> sel-kind;
+    in property <bool> sel-locked;
+    in property <bool> sel-active;
+    in property <bool> sel-deleted;
+    in-out property <string> prov-aliases;
+    in property <string> prov-status;
+    callback prov-created(int);
+    callback prov-selected(string);
+    callback prov-used();
+    callback prov-saved();
+    callback prov-deleted();
+    callback prov-restored();
+    callback prov-purged();
+    callback prov-tested();
+    // persona 初值：Rust 打开设置页时从 DB 读取注入
     in property <string> cfg-system-prompt; // 角色设定：助手 system prompt（persona 表）
     in property <string> cfg-user-persona; // 角色设定：用户人设（persona 表）
     in property <string> cfg-temperature; // 角色设定：温度（空串 = 未设定）
@@ -47,7 +65,7 @@ export component AppWindow inherits Window {
     callback model-picked(string); // 选择模型（Rust 切换激活 + 回写设置 kv）
     callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
     callback settings-requested(); // 进入设置整页（Rust 读配置注入初值 + settings-page 置 true）
-    callback settings-saved(int, string, string, string, string, string, string); // 提供商/base_url/key/model + 助手提示词/用户人设/温度（Rust 校验落盘）
+    callback settings-saved(string, string, string); // 助手提示词/用户人设/温度（persona 两页保存；提供商页即时落盘）
     callback settings-back(); // 返回对话（放弃未保存编辑）
 
     // 侧栏初始宽 190px（默认窗口 1120 的 ~17%）；不得引用 root.width，
@@ -146,19 +164,34 @@ export component AppWindow inherits Window {
         }
     }
 
-    // —— 设置整页：与主三框互斥切换，进入即重建（初值 = 最新注入的 cfg-*）——
+    // —— 设置整页：与主三框互斥切换，进入即重建；提供商页双向链到本窗口属性 ——
     if root.settings-page : SettingsPage {
-        init-provider: root.cfg-provider;
-        init-base-url: root.cfg-base-url;
-        init-api-key: root.cfg-api-key;
-        init-model: root.cfg-model;
+        provs: root.provs;
+        prov-sel <=> root.prov-sel;
+        prov-name <=> root.prov-name;
+        prov-base <=> root.prov-base;
+        prov-suffix <=> root.prov-suffix;
+        prov-key <=> root.prov-key;
+        prov-api <=> root.prov-api;
+        sel-kind: root.sel-kind;
+        sel-locked: root.sel-locked;
+        sel-active: root.sel-active;
+        sel-deleted: root.sel-deleted;
+        prov-aliases <=> root.prov-aliases;
+        prov-status: root.prov-status;
+        prov-created(k) => { root.prov-created(k); }
+        prov-selected(id) => { root.prov-selected(id); }
+        prov-used => { root.prov-used(); }
+        prov-saved => { root.prov-saved(); }
+        prov-deleted => { root.prov-deleted(); }
+        prov-restored => { root.prov-restored(); }
+        prov-purged => { root.prov-purged(); }
+        prov-tested => { root.prov-tested(); }
         init-system-prompt: root.cfg-system-prompt;
         init-user-persona: root.cfg-user-persona;
         init-temperature: root.cfg-temperature;
         status: root.cfg-status;
-        saved(p, url, key, model, sys, persona, temp) => {
-            root.settings-saved(p, url, key, model, sys, persona, temp);
-        }
+        saved(sys, persona, temp) => { root.settings-saved(sys, persona, temp); }
         back => { root.settings-back(); }
     }
 }

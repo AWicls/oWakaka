@@ -115,6 +115,66 @@ component PromptRow inherits Rectangle {
     }
 }
 
+/// 提供商列表项（列表竖栏）：主行名称、副行状态；编辑中底色、使用中绿点、删除灰显
+component ProvItemRow inherits Rectangle {
+    in property <string> name;
+    in property <string> kind;
+    in property <bool> active;
+    in property <bool> deleted;
+    in property <bool> current;
+    callback clicked();
+
+    height: 46px;
+    border-radius: 7px;
+    background: root.current ? Theme.p.listActive
+            : (ta.has-hover ? Theme.p.listHover : transparent);
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    VerticalLayout {
+        padding: 8px;
+        spacing: 1px;
+        Text {
+            text: root.name;
+            color: root.deleted ? Theme.p.textMuted : Theme.p.textPrimary;
+            font-size: 13px;
+            overflow: elide;
+        }
+        Text {
+            text: root.deleted ? "已删除" : (root.active ? "● 使用中" : root.kind);
+            color: root.active ? Theme.p.link : Theme.p.textMuted;
+            font-size: 11px;
+            overflow: elide;
+        }
+    }
+}
+
+/// 弹层菜单项（新增提供商类型选择）
+component MenuOpt inherits Rectangle {
+    in property <string> label;
+    callback picked();
+
+    height: 30px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.p.listHover : transparent;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    Text {
+        x: 10px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: Theme.p.textPrimary;
+        font-size: 13px;
+    }
+}
+
 /// 左侧分类导航条目（列表式：选中高亮 + 左侧强调条）
 component NavItem inherits Rectangle {
     in property <string> label;
@@ -189,30 +249,56 @@ component BackButton inherits Rectangle {
     }
 }
 
-/// 全屏设置页（与对话界面整页切换）：顶栏返回 + 左导航四分区 + 右内容卡片。
-/// 初值由 AppWindow 注入（打开时从 DB 设置 + persona 读取），保存经回调交 Rust
-/// 校验落盘，状态行回显成功/失败；返回 = 放弃未保存编辑（页面销毁即重置）。
-/// 各分区页是 if-block 实例，切页销毁重建，编辑值存于页面级 ed-* property（<=> 绑定）
+/// 提供商清单项（列表竖栏数据，Rust 注入）
+export struct ProvRow {
+    id: string,
+    name: string,
+    kind: string,       // 厂商标签（展示用）
+    active: bool,       // 使用中
+    deleted: bool,      // 逻辑删除（灰显）
+}
+
+/// 全屏设置页：顶栏返回 + 左导航四分区。提供商页 = 列表卡 + 详情卡，
+/// 字段以 Rust 侧 providers 整包为真相源（in-out 双向链，操作即时回注）；
+/// persona 两页存页面级 ed-* 编辑态，底部「保存」一次性提交。
+/// 各分区页是 if-block 实例，切页销毁重建。
 export component SettingsPage inherits Rectangle {
-    in property <int> init-provider; // 0 通用兼容 | 1 小米 MiMo（与 Rust 映射一致）
-    in property <string> init-base-url;
-    in property <string> init-api-key;
-    in property <string> init-model;
+    // —— 提供商页（Rust 注入/回注；密钥框恒注空，提交空 = 不改已存） ——
+    in property <[ProvRow]> provs;
+    in-out property <string> prov-sel;      // 正在编辑的条目 id（空 = 无可用）
+    in-out property <string> prov-name;
+    in-out property <string> prov-base;
+    in-out property <string> prov-suffix;
+    in-out property <string> prov-key;
+    in-out property <int> prov-api;         // 0 chat | 1 responses
+    in property <string> sel-kind;          // 当前条目厂商显示名
+    in property <bool> sel-locked;          // 定制提供商：接口族锁定
+    in property <bool> sel-active;          // 当前条目 = 使用中
+    in property <bool> sel-deleted;         // 当前条目已逻辑删除
+    in-out property <string> prov-aliases;  // 别名多行文本（每行 id=显示名）
+    in property <string> prov-status;       // 提供商页状态行（测试/保存回显）
+    callback prov-created(int);             // 新增菜单选择：0 通用兼容 | 1 小米 MiMo
+    callback prov-selected(string);         // 点列表项 → Rust 回注详情
+    callback prov-used();                   // 使用此提供商
+    callback prov-saved();                  // 完成（表单写回条目 + 密钥）
+    callback prov-deleted();                // 逻辑删除
+    callback prov-restored();               // 恢复
+    callback prov-purged();                 // 彻底删除（连带清密钥）
+    callback prov-tested();                 // 测试连通（用表单当前值）
+
+    // —— persona 两页 + 界面页无需回写（主题走 Theme 全局） ——
     in property <string> init-system-prompt; // 助手设定（persona assistant）
     in property <string> init-user-persona; // 用户人设（persona user）
     in property <string> init-temperature; // 温度（空 = 未设定）
     in property <string> status;
-    callback saved(int, string, string, string, string, string, string);
+    callback saved(string, string, string); // 助手提示词/用户人设/温度
     callback back();
 
     // 0 界面 | 1 提供商（默认：改配置主路径）| 2 AI 助手 | 3 用户设定
     property <int> page: 1;
+    property <bool> add-menu: false;        // 新增提供商弹层
 
-    // 编辑态（跨页存续）：初值 = 注入的落盘配置
-    property <int> ed-provider: root.init-provider;
-    in-out property <string> ed-url: root.init-base-url;
-    in-out property <string> ed-key: root.init-api-key;
-    in-out property <string> ed-model: root.init-model;
+    // 编辑态（persona 字段跨页存续）：初值 = 注入的落盘配置
     in-out property <string> ed-system: root.init-system-prompt;
     in-out property <string> ed-persona: root.init-user-persona;
     in-out property <string> ed-temp: root.init-temperature;
@@ -278,8 +364,167 @@ export component SettingsPage inherits Rectangle {
                 }
             }
 
-            // —— 右：当前分区内容卡 ——
-            Rectangle {
+            // —— 提供商页：列表卡 + 详情卡（Rust 为真相源，操作即时回注） ——
+            if root.page == 1 : HorizontalLayout {
+                spacing: 10px;
+
+                Rectangle {
+                    width: 160px;
+                    background: Theme.p.panelBg;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.p.panelBorder;
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 4px;
+                        Pill {
+                            label: "＋ 新增";
+                            picked => { root.add-menu = true; }
+                        }
+                        for pr in root.provs : ProvItemRow {
+                            name: pr.name;
+                            kind: pr.kind;
+                            active: pr.active;
+                            deleted: pr.deleted;
+                            current: pr.id == root.prov-sel;
+                            clicked => { root.prov-selected(pr.id); }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.p.panelBg;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.p.panelBorder;
+                    clip: true;
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+
+                        Text {
+                            text: root.prov-sel == "" ? "提供商"
+                                : (root.sel-deleted ? "已删除的提供商" : "编辑提供商");
+                            color: Theme.p.textPrimary;
+                            font-size: 14px;
+                        }
+
+                        if root.prov-sel == "" : Text {
+                            text: "还没有可用的提供商：点左上「＋ 新增」创建第一个。";
+                            color: Theme.p.textMuted;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+
+                        if root.prov-sel != "" : FieldRow {
+                            label: "显示名（留空 = 用厂商标签）";
+                            text <=> root.prov-name;
+                            hint: root.sel-kind;
+                        }
+                        if root.prov-sel != "" : FieldRow {
+                            label: "基础地址（custom 必填；定制厂商留空 = 内置端点）";
+                            text <=> root.prov-base;
+                            hint: "https://api.openai.com/v1";
+                        }
+                        if root.prov-sel != "" : FieldRow {
+                            label: "路径后缀（可选，拼在基础地址后）";
+                            text <=> root.prov-suffix;
+                            hint: "如 proxy/aigw，可留空";
+                        }
+                        if root.prov-sel != "" : FieldRow {
+                            label: "API 密钥（留空 = 保持已存值不变；只存 config.toml，不进 DB）";
+                            text <=> root.prov-key;
+                            hint: "sk-...";
+                        }
+
+                        if root.prov-sel != "" : Text {
+                            text: "接入方案";
+                            color: Theme.p.textMuted;
+                            font-size: 12px;
+                        }
+                        if root.prov-sel != "" && !root.sel-locked : HorizontalLayout {
+                            spacing: 8px;
+                            height: 30px;
+                            Pill {
+                                width: 120px;
+                                label: "chat";
+                                selected: root.prov-api == 0;
+                                picked => { root.prov-api = 0; }
+                            }
+                            Pill {
+                                width: 120px;
+                                label: "responses";
+                                selected: root.prov-api == 1;
+                                picked => { root.prov-api = 1; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                        }
+                        if root.prov-sel != "" && root.sel-locked : Text {
+                            text: "responses（定制提供商锁定）";
+                            color: Theme.p.textSecondary;
+                            font-size: 13px;
+                        }
+
+                        if root.prov-sel != "" : PromptRow {
+                            label: "可用模型别名（每行一条：模型ID=显示名；别名可省）";
+                            text <=> root.prov-aliases;
+                            hint: "gpt-4o=主力\nmimo-v2.5";
+                        }
+
+                        Text {
+                            visible: root.prov-status != "";
+                            text: root.prov-status;
+                            color: Theme.p.link;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { vertical-stretch: 1; }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            height: 30px;
+                            visible: root.prov-sel != "";
+                            Pill {
+                                width: 88px;
+                                label: "测试连通";
+                                picked => { root.prov-tested(); }
+                            }
+                            Pill {
+                                width: 72px;
+                                label: "完成";
+                                primary: true;
+                                picked => { root.prov-saved(); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            if !root.sel-deleted : Pill {
+                                width: 72px;
+                                label: "删除";
+                                picked => { root.prov-deleted(); }
+                            }
+                            if !root.sel-deleted && !root.sel-active : Pill {
+                                width: 108px;
+                                label: "使用此提供商";
+                                picked => { root.prov-used(); }
+                            }
+                            if root.sel-deleted : Pill {
+                                width: 72px;
+                                label: "恢复";
+                                picked => { root.prov-restored(); }
+                            }
+                            if root.sel-deleted : Pill {
+                                width: 88px;
+                                label: "彻底删除";
+                                picked => { root.prov-purged(); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // —— 其余分区：单内容卡 ——
+            if root.page != 1 : Rectangle {
                 horizontal-stretch: 1;
                 background: Theme.p.panelBg;
                 border-radius: 14px;
@@ -292,142 +537,138 @@ export component SettingsPage inherits Rectangle {
 
                     Text {
                         text: root.page == 0 ? "界面"
-                            : root.page == 1 ? "提供商"
                             : root.page == 2 ? "AI 助手设定" : "用户设定";
                         color: Theme.p.textPrimary;
                         font-size: 14px;
                     }
 
-                if root.page == 0 : VerticalLayout {
-                    spacing: 10px;
-                    Text {
-                        text: "主题";
-                        color: Theme.p.textMuted;
-                        font-size: 12px;
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        height: 30px;
-                        Rectangle { horizontal-stretch: 1; }
-                        Pill {
-                            width: 110px;
-                            label: "浅色";
-                            selected: Theme.mode == 0;
-                            picked => { Theme.mode = 0; }
+                    if root.page == 0 : VerticalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: "主题";
+                            color: Theme.p.textMuted;
+                            font-size: 12px;
                         }
-                        Pill {
-                            width: 110px;
-                            label: "深色";
-                            selected: Theme.mode == 1;
-                            picked => { Theme.mode = 1; }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            height: 30px;
+                            Rectangle { horizontal-stretch: 1; }
+                            Pill {
+                                width: 110px;
+                                label: "浅色";
+                                selected: Theme.mode == 0;
+                                picked => { Theme.mode = 0; }
+                            }
+                            Pill {
+                                width: 110px;
+                                label: "深色";
+                                selected: Theme.mode == 1;
+                                picked => { Theme.mode = 1; }
+                            }
+                            Pill {
+                                width: 130px;
+                                label: "跟随系统";
+                                selected: Theme.mode == 2;
+                                picked => { Theme.mode = 2; }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
                         }
-                        Pill {
-                            width: 130px;
-                            label: "跟随系统";
-                            selected: Theme.mode == 2;
-                            picked => { Theme.mode = 2; }
+                        Text {
+                            text: "主题即时生效（与侧栏主题菜单同源）；暂不持久，重启回退跟随系统";
+                            color: Theme.p.textMuted;
+                            font-size: 11px;
+                            wrap: word-wrap;
                         }
-                        Rectangle { horizontal-stretch: 1; }
+                        Rectangle { vertical-stretch: 1; }
                     }
-                    Text {
-                        text: "主题即时生效（与侧栏主题菜单同源）；暂不持久，重启回退跟随系统";
-                        color: Theme.p.textMuted;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
-                    Rectangle { vertical-stretch: 1; }
-                }
 
-                if root.page == 1 : VerticalLayout {
-                    spacing: 10px;
-                    Text {
-                        text: "提供商";
-                        color: Theme.p.textMuted;
-                        font-size: 12px;
-                    }
-                    HorizontalLayout {
-                        spacing: 8px;
-                        height: 30px;
-                        Rectangle { horizontal-stretch: 1; }
-                        Pill {
-                            width: 120px;
-                            label: "通用兼容";
-                            selected: root.ed-provider == 0;
-                            picked => { root.ed-provider = 0; }
+                    if root.page == 2 : VerticalLayout {
+                        spacing: 10px;
+                        PromptRow {
+                            label: "助手设定（system prompt：每次发送前置注入，留空 = 不发）";
+                            text <=> root.ed-system;
+                            hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
                         }
-                        Pill {
-                            width: 120px;
-                            label: "小米 MiMo";
-                            selected: root.ed-provider == 1;
-                            picked => { root.ed-provider = 1; }
+                        FieldRow {
+                            label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
+                            text <=> root.ed-temp;
+                            hint: "0.7";
                         }
-                        Rectangle { horizontal-stretch: 1; }
+                        Rectangle { vertical-stretch: 1; }
                     }
-                    FieldRow {
-                        label: "API 根地址（custom 必填；MiMo 留空 = 官方端点，写了 = 专属网关覆盖）";
-                        text <=> root.ed-url;
-                        hint: "https://api.xiaomimimo.com/v1";
-                    }
-                    FieldRow {
-                        label: "API 密钥（留空 = 保持已存值不变）";
-                        text <=> root.ed-key;
-                        hint: "sk-...";
-                    }
-                    FieldRow {
-                        label: "激活模型（模型下拉与请求携带的 model 字段）";
-                        text <=> root.ed-model;
-                        hint: "mimo-v2.5";
-                    }
-                    Rectangle { vertical-stretch: 1; }
-                }
 
-                if root.page == 2 : VerticalLayout {
-                    spacing: 10px;
-                    PromptRow {
-                        label: "助手设定（system prompt：每次发送前置注入，留空 = 不发）";
-                        text <=> root.ed-system;
-                        hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
+                    if root.page == 3 : VerticalLayout {
+                        spacing: 10px;
+                        PromptRow {
+                            label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
+                            text <=> root.ed-persona;
+                            hint: "例如：资深 Rust 工程师，关注架构与成本";
+                        }
+                        Rectangle { vertical-stretch: 1; }
                     }
-                    FieldRow {
-                        label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
-                        text <=> root.ed-temp;
-                        hint: "0.7";
-                    }
-                    Rectangle { vertical-stretch: 1; }
-                }
-
-                if root.page == 3 : VerticalLayout {
-                    spacing: 10px;
-                    PromptRow {
-                        label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
-                        text <=> root.ed-persona;
-                        hint: "例如：资深 Rust 工程师，关注架构与成本";
-                    }
-                    Rectangle { vertical-stretch: 1; }
-                }
                 }
             }
         }
 
         Text {
-            visible: root.status != "";
+            visible: root.status != "" && root.page != 1;
             text: root.status;
             color: Theme.p.link;
             font-size: 12px;
             wrap: word-wrap;
         }
 
+        // 全局「保存」只服务 persona 两页；提供商页在详情卡内即时保存
         HorizontalLayout {
             spacing: 8px;
             height: 30px;
+            visible: root.page == 2 || root.page == 3;
             Rectangle { horizontal-stretch: 1; }
             Pill {
                 width: 88px;
                 label: "保存";
                 primary: true;
                 picked => {
-                    root.saved(root.ed-provider, root.ed-url, root.ed-key,
-                        root.ed-model, root.ed-system, root.ed-persona, root.ed-temp);
+                    root.saved(root.ed-system, root.ed-persona, root.ed-temp);
+                }
+            }
+        }
+    }
+
+    // —— 新增提供商：遮罩 + 弹层（锚列表卡「＋ 新增」下方，坐标按固定布局推算） ——
+    if root.add-menu : Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        TouchArea {
+            clicked => { root.add-menu = false; }
+        }
+    }
+    if root.add-menu : Rectangle {
+        x: 14px + 148px + 10px + 8px;
+        y: 14px + 34px + 12px + 8px + 30px + 4px;
+        width: 168px;
+        height: 76px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.p.inputBorder;
+        background: Theme.p.panelBg;
+        VerticalLayout {
+            padding: 6px;
+            spacing: 0;
+            MenuOpt {
+                label: "自定义";
+                picked => {
+                    root.add-menu = false;
+                    root.prov-created(0);
+                }
+            }
+            MenuOpt {
+                label: "Xiaomi MiMo";
+                picked => {
+                    root.add-menu = false;
+                    root.prov-created(1);
                 }
             }
         }
