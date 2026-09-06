@@ -5,6 +5,11 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Fixed
+- 双击 release 产物 `oWakaka.exe` 会先弹出一个 cmd 控制台窗口：Rust 可执行目标默认编译为**控制台子系统**，Windows 为其分配控制台。`main.rs` 加 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`——release 切 GUI 子系统（PE Subsystem 实测由 3 变 2），debug 保留控制台以照常看 `cargo run` 的诊断输出。已知代价：release 下 `eprintln!` 类启动提示（如「DB 打开失败，本运行不持久化」）不再可见
+
 ## [0.3.1] - 2026-09-06
 
 本版本为**内部重构与技术债清理**，无用户可感知的新功能或行为变化（Rust 层 3 项 + Slint UI 层 3 项；`cargo fmt`/`clippy`/`test` 全绿）。
