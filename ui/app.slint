@@ -5,7 +5,7 @@
 // 配色一律取自 theme.slint 的 Theme 全局（VS Code 现代深/浅双主题 + 跟随系统）。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Card } from "theme.slint";
+import { Theme, Card, Metrics } from "theme.slint";
 import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
@@ -303,7 +303,7 @@ export component AppWindow inherits Window {
             vertical-stretch: 1;
 
             SettingsNav {
-                width: Math.max(104px, Math.min(150px, root.width * 0.14));
+                width: Metrics.rail-width(root.width);
                 page: settings-vl.tab;
                 page-picked(n) => { settings-vl.tab = n; }
                 back => { root.settings-back(); }

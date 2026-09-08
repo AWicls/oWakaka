@@ -3,7 +3,7 @@
 // 装配与页切换见 app.slint 设置块。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Card } from "theme.slint";
+import { Theme, Card, Metrics } from "theme.slint";
 import {
     Avatar,
     FieldRow,
@@ -51,7 +51,7 @@ export component AstPage inherits Rectangle {
         spacing: 10px;
 
         Card {
-            width: Math.max(120px, Math.min(180px, root.win-width * 0.17));
+            width: Metrics.rail-width(root.win-width);
             VerticalLayout {
                 padding: 8px;
                 spacing: 4px;

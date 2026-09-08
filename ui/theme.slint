@@ -69,6 +69,15 @@ export enum IconKind {
     cross,       // 叉号（关闭/删除）
 }
 
+/// 布局度量：跨界面统一的尺寸常数入口（新增尺寸一律加在这里，勿在使用点另写公式）。
+export global Metrics {
+    /// 设置域左竖栏宽（导航卡 / 提供商与助手列表卡通用）：
+    /// 聊天侧栏（可拖拽）默认 190px 与此同量级，三界面左栏观感一致。
+    public pure function rail-width(win: length) -> length {
+        Math.max(150px, Math.min(210px, win * 0.18))
+    }
+}
+
 /// 通用图标（SVG path，viewBox 16×16），种类由 [`IconKind`] 枚举选定。
 /// 全部描边式（对勾/太阳/显示器/叉号），月亮/旋钮为填充；单色随 ink 参数主题化。
 /// 各图标用 `if kind == X` 条件实例化（非 visible 门控）：未选中的图标不进渲染树。
