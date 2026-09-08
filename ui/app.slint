@@ -6,17 +6,17 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme, Card, Metrics } from "theme.slint";
-import { VSplitter, HSplitter } from "splitter.slint";
-import { ChatMessage, Bubble } from "bubble.slint";
-import { SessionSidebar, SessionItem } from "session.slint";
-import { InputArea, ModelItem } from "input.slint";
-import { SettingsNav } from "settings.slint";
-import { ProvPage, ModelRow, RemoteRow } from "settings_prov.slint";
-import { AstPage } from "settings_ast.slint";
-import { ThemePage, UserPage } from "settings_basic.slint";
-import { CaptionBar } from "caption.slint";
-import { TrashOverlay, TrashItem } from "trash.slint";
-import { RailItem, Avatar, Pill } from "controls.slint";
+import { VSplitter, HSplitter } from "common/splitter.slint";
+import { ChatMessage, Bubble } from "chat/bubble.slint";
+import { SessionSidebar, SessionItem } from "chat/session.slint";
+import { InputArea, ModelItem } from "chat/input.slint";
+import { SettingsNav } from "settings/settings.slint";
+import { ProvPage, ModelRow, RemoteRow } from "settings/settings_prov.slint";
+import { AstPage } from "settings/settings_ast.slint";
+import { ThemePage, UserPage } from "settings/settings_basic.slint";
+import { CaptionBar } from "common/caption.slint";
+import { TrashOverlay, TrashItem } from "common/trash.slint";
+import { RailItem, Avatar, Pill } from "common/controls.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct（TrashItem 定义见 trash.slint，RailItem 见 controls.slint）
 export { ChatMessage, SessionItem, ModelItem, RailItem, ModelRow, RemoteRow, TrashItem }

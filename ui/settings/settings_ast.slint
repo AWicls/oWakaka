@@ -3,7 +3,7 @@
 // 装配与页切换见 app.slint 设置块。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Card, Metrics } from "theme.slint";
+import { Theme, Card, Metrics } from "../theme.slint";
 import {
     Avatar,
     FieldRow,
@@ -13,8 +13,8 @@ import {
     RailItem,
     RailRow,
     Modal,
-} from "controls.slint";
-import { ModelItem } from "input.slint";
+} from "../common/controls.slint";
+import { ModelItem } from "../chat/input.slint";
 
 export component AstPage inherits Rectangle {
     // 宿主窗口宽（侧栏宽度公式用；不可引用自身 root.width——本页宽由布局给，成环）

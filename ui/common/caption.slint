@@ -1,7 +1,7 @@
 // 无边框自绘标题栏：拖拽区（按下发起原生拖窗，双击切最大化）+ 右上角三键
 //（Windows 惯例序：最小化/最大化·还原/关闭，关闭贴右角）。图标一律走 theme.slint Icon
 // 图元自绘——Unicode ✕/❐ 在默认字体下缺字成豆腐块「口」且大小不一。
-import { Theme, Icon, IconKind } from "theme.slint";
+import { Theme, Icon, IconKind } from "../theme.slint";
 
 /// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger（关闭）悬停红底白图标；图标复用 theme.slint Icon
 component CaptionBtn inherits Rectangle {

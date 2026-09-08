@@ -1,8 +1,8 @@
 // 设置域两小页：界面设定（主题三态，直改 Theme 全局即时生效）+ 用户设定（用户人设）。
 // 装配（页切换、状态行、保存按钮行）见 app.slint 设置块。
 
-import { Theme, Card } from "theme.slint";
-import { Pill, PromptRow } from "controls.slint";
+import { Theme, Card } from "../theme.slint";
+import { Pill, PromptRow } from "../common/controls.slint";
 
 /// 界面设定页：主题即时生效（与侧栏主题菜单同源），持久化由宿主接线落库
 export component ThemePage inherits Card {
