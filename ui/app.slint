@@ -5,142 +5,21 @@
 // 配色一律取自 theme.slint 的 Theme 全局（VS Code 现代深/浅双主题 + 跟随系统）。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icon, Card } from "theme.slint";
-import { VSplitter, HSplitter } from "splitter.slint";
-import { ChatMessage, Bubble } from "bubble.slint";
-import { SessionSidebar, SessionItem } from "session.slint";
-import { InputArea, ModelItem } from "input.slint";
-import { SettingsPage, ProvRow, ModelRow, RemoteRow, AstRow } from "settings.slint";
+import { Theme, Card, Metrics } from "theme.slint";
+import { VSplitter, HSplitter } from "common/splitter.slint";
+import { ChatMessage, Bubble } from "chat/bubble.slint";
+import { SessionSidebar, SessionItem } from "chat/session.slint";
+import { InputArea, ModelItem } from "chat/input.slint";
+import { SettingsNav } from "settings/settings.slint";
+import { ProvPage, ModelRow, RemoteRow } from "settings/settings_prov.slint";
+import { AstPage } from "settings/settings_ast.slint";
+import { ThemePage, UserPage } from "settings/settings_basic.slint";
+import { CaptionBar } from "common/caption.slint";
+import { TrashOverlay, TrashItem } from "common/trash.slint";
+import { RailItem, Avatar } from "common/controls.slint";
 
-// 再导出供 Rust（include_modules）消费的 struct
-export { ChatMessage, SessionItem, ModelItem, ProvRow, ModelRow, RemoteRow, AstRow }
-
-/// 回收站一行（逻辑删除的会话）
-export struct TrashItem {
-    id: int,
-    title: string,
-}
-
-/// 回收站浮层里的小文字按钮
-component TinyBtn inherits Rectangle {
-    in property <string> label;
-    in property <bool> danger: false;
-    callback picked();
-
-    width: t.preferred-width + 14px;
-    height: 22px;
-    border-radius: 6px;
-    border-width: 1px;
-    border-color: Theme.p.inputBorder;
-    background: ta.has-hover ? Theme.p.listHover : transparent;
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-    t := Text {
-        x: 7px;
-        y: (parent.height - self.height) / 2;
-        text: root.label;
-        color: root.danger ? #e57373 : Theme.p.link;
-        font-size: 12px;
-    }
-}
-
-// —— 无边框自绘标题栏：原生窗口按钮桥（min/max/close/drag）与 CaptionBar 组件 ——
-// 图标一律图元自绘：Unicode ✕/❐ 在默认字体下缺字成豆腐块「口」、且大小不一
-
-/// 标题栏 caption 按钮图标种类
-enum CaptionIcon {
-    minimize,
-    maximize,
-    restore,
-    close,
-}
-
-/// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger（关闭）悬停红底白图标；图标复用 theme.slint Icon
-component CaptionBtn inherits Rectangle {
-    in property <CaptionIcon> icon;
-    in property <bool> danger: false;
-    callback picked();
-
-    property <brush> fg: ta.has-hover && root.danger ? white : Theme.p.textSecondary;
-    // 实底按钮色（非悬停=标题栏底色）：还原图标前框用它遮住后框重叠线（作 Icon.fill2）
-    property <brush> btn-bg: ta.has-hover ? (root.danger ? #c42b1c : Theme.p.listHover) : Theme.p.windowBg;
-
-    width: 46px;
-    background: root.btn-bg;
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-    // 图标收编至 theme.slint Icon（枚举→which），不再在此各写一套 Path
-    Icon {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 16px;
-        height: 16px;
-        // 8 最小化 | 9 最大化 | 10 还原 | 11 叉号（关闭）
-        which: root.icon == CaptionIcon.minimize ? 8
-             : root.icon == CaptionIcon.maximize ? 9
-             : root.icon == CaptionIcon.restore ? 10 : 11;
-        ink: root.fg;
-        fill2: root.btn-bg;
-    }
-}
-
-/// 顶部 34px 标题栏：拖拽区（按下发起原生拖窗，双击切最大化）+ 右三键
-///（Windows 惯例序：最小化/最大化·还原/关闭，关闭贴右角）
-component CaptionBar inherits Rectangle {
-    in property <bool> is-maximized;
-    callback win-minimize();
-    callback win-maximize();
-    callback win-close();
-    callback win-drag();
-
-    background: Theme.p.windowBg;
-    HorizontalLayout {
-        spacing: 0px;
-        Rectangle {
-            horizontal-stretch: 1;
-            TouchArea {
-                width: parent.width;
-                height: parent.height;
-                pointer-event(ev) => {
-                    if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.down) {
-                        root.win-drag();
-                    }
-                }
-                double-clicked => { root.win-maximize(); }
-            }
-            Text {
-                width: parent.width;
-                height: parent.height;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                text: "oWakaka";
-                color: Theme.p.textMuted;
-                font-size: 12px;
-            }
-        }
-        CaptionBtn {
-            icon: CaptionIcon.minimize;
-            picked => { root.win-minimize(); }
-        }
-        CaptionBtn {
-            icon: root.is-maximized ? CaptionIcon.restore : CaptionIcon.maximize;
-            picked => { root.win-maximize(); }
-        }
-        CaptionBtn {
-            icon: CaptionIcon.close;
-            danger: true;
-            picked => { root.win-close(); }
-        }
-    }
-}
+// 再导出供 Rust（include_modules）消费的 struct（TrashItem 定义见 trash.slint，RailItem 见 controls.slint）
+export { ChatMessage, SessionItem, ModelItem, RailItem, ModelRow, RemoteRow, TrashItem }
 
 export component AppWindow inherits Window {
     title: "oWakaka";
@@ -176,7 +55,7 @@ export component AppWindow inherits Window {
 
     changed ui-theme => { root.theme-changed(root.ui-theme); }
     // —— 提供商页状态（providers 整包视图；Rust 注入/回注，密钥不下 UI） ——
-    in property <[ProvRow]> provs;
+    in property <[RailItem]> provs;
     in-out property <string> prov-sel;
     in-out property <string> prov-name;
     in-out property <string> prov-base;
@@ -185,7 +64,6 @@ export component AppWindow inherits Window {
     in-out property <int> prov-api;
     in property <string> sel-kind;
     in property <bool> sel-locked;
-    in property <bool> sel-active;
     in property <bool> sel-deleted;
     in property <string> prov-status;
     // —— Step B：模型管理（当前提供商模型 + 远端拉取清单） ——
@@ -201,14 +79,13 @@ export component AppWindow inherits Window {
     callback prov-model-removed(string);   // 移除模型
     callback prov-created(int);
     callback prov-selected(string);
-    callback prov-used();
-    callback prov-saved();
-    callback prov-deleted();
+    callback prov-autosave();
+    callback prov-toggled(string);
     callback prov-restored();
-    callback prov-purged();
+    callback prov-purged(string);
     callback prov-tested();
     // —— AI 助手页状态（多助手 CRUD；Rust 注入/回注，「完成」写回） ——
-    in property <[AstRow]> asts;
+    in property <[RailItem]> asts;
     in-out property <string> ast-sel;
     in-out property <string> ast-name;
     in-out property <string> ast-prompt;
@@ -224,11 +101,10 @@ export component AppWindow inherits Window {
     in property <string> ast-status;
     callback ast-created();
     callback ast-selected(string);
-    callback ast-saved();
-    callback ast-deleted();
+    callback ast-autosave();
     callback ast-restored();
-    callback ast-purged();
-    callback ast-defaulted();
+    callback ast-purged(string);
+    callback ast-defaulted(string);
     callback ast-avatar-picked();
     callback ast-avatar-cleared();
     // persona 初值：Rust 打开设置页时从 DB 读取注入
@@ -245,11 +121,11 @@ export component AppWindow inherits Window {
     callback trash-purge(int);
     callback stop(); // 停止当前可见会话的生成
     callback toggle-thinking();
-    callback model-picked(string); // 选择模型（Rust 切换激活 + 回写设置 kv）
+    callback model-picked(string, string); // (提供商 id, 模型 id)：Rust 隐式路由 + 回写设置 kv
     callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
     callback settings-requested(); // 进入设置整页（Rust 读配置注入初值 + settings-page 置 true）
-    callback settings-saved(string); // 用户人设（persona user 页保存；提供商/助手页卡内保存）
-    callback settings-back(); // 返回对话（放弃未保存编辑）
+    callback settings-saved(string); // 用户人设自动保存（编辑即存；提供商/助手页卡内保存）
+    callback settings-back(); // 返回对话（用户人设编辑均已即时落库）
     // —— 标题栏窗控桥（Rust ui/frame.rs 实现拖窗/最小化等原生动作） ——
     callback win-minimize();
     callback win-maximize(); // 最大化/还原互换（标题栏按钮与拖拽区双击共用）
@@ -309,28 +185,12 @@ export component AppWindow inherits Window {
                     // 布局不垂直居中定高元素：外套吃满行高的 Rectangle，圆内自居中
                     Rectangle {
                         width: 28px;
-                        Rectangle {
+                        Avatar {
                             y: (parent.height - self.height) / 2;
                             width: 28px;
-                            height: 28px;
-                            border-radius: 14px;
-                            clip: true;
-                            background: root.chat-ast-color;
-                            if root.chat-ast-img.width > 0 : Image {
-                                width: 28px;
-                                height: 28px;
-                                source: root.chat-ast-img;
-                                image-fit: cover;
-                            }
-                            if root.chat-ast-img.width == 0 : Text {
-                                width: 28px;
-                                height: 28px;
-                                text: root.chat-ast-initial;
-                                color: white;
-                                font-size: 13px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                            img: root.chat-ast-img;
+                            tint: root.chat-ast-color;
+                            initial: root.chat-ast-initial;
                         }
                     }
                     Text {
@@ -404,156 +264,135 @@ export component AppWindow inherits Window {
                 send-submit(text) => { root.send(text); }
                 stop-request => { root.stop(); }
                 thinking-toggled => { root.toggle-thinking(); }
-                model-picked(id) => { root.model-picked(id); }
+                model-picked(prov, id) => { root.model-picked(prov, id); }
                 models-requested => { root.models-requested(); }
             }
         }
     }
 
-    // —— 回收站浮层：遮罩 + 居中卡（恢复 / 彻底删除）。只盖内容区，标题栏在其上层 ——
-    if root.trash-open : Rectangle {
+    // —— 回收站浮层（见 trash.slint）：遮罩 + 居中卡（恢复 / 彻底删除），只盖内容区 ——
+    if root.trash-open : TrashOverlay {
         x: 0;
         y: root.caption-height;
         width: root.width;
         height: root.content-height;
-        background: rgba(0, 0, 0, 0.45);
-        TouchArea {
-            width: parent.width;
-            height: parent.height;
-            clicked => { root.trash-closed(); }
-        }
-    }
-    if root.trash-open : Card {
-        x: (root.width - self.width) / 2;
-        y: root.caption-height + (root.content-height - self.height) / 2;
-        width: Math.min(400px, root.width - 60px);
-        height: Math.min(420px, root.content-height - 40px);
-        VerticalLayout {
-            padding: 18px;
-            spacing: 10px;
-            HorizontalLayout {
-                height: 24px;
-                spacing: 8px;
-                Text {
-                    text: "回收站";
-                    color: Theme.p.textPrimary;
-                    font-size: 14px;
-                    vertical-alignment: center;
-                }
-                Rectangle { horizontal-stretch: 1; }
-                TinyBtn {
-                    label: "关闭";
-                    picked => { root.trash-closed(); }
-                }
-            }
-            if root.trash-list.length == 0 : Text {
-                text: "没有已删除的会话。侧栏条目悬停后点行右侧的叉号，删掉的会话会先进这里。";
-                color: Theme.p.textMuted;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            ScrollView {
-                vertical-stretch: 1;
-                viewport-width: self.visible-width;
-                horizontal-scrollbar-policy: always-off;
-                VerticalLayout {
-                    spacing: 4px;
-                    for t in root.trash-list : HorizontalLayout {
-                        height: 28px;
-                        spacing: 8px;
-                        Text {
-                            text: t.title;
-                            horizontal-stretch: 1;
-                            color: Theme.p.textSecondary;
-                            font-size: 13px;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-                        TinyBtn {
-                            label: "恢复";
-                            picked => { root.trash-restore(t.id); }
-                        }
-                        TinyBtn {
-                            label: "彻底删除";
-                            danger: true;
-                            picked => { root.trash-purge(t.id); }
-                        }
-                    }
-                }
-            }
-            Text {
-                text: "恢复 = 放回侧栏末尾；彻底删除连同全部消息物理清除，不可找回。";
-                color: Theme.p.textMuted;
-                font-size: 11px;
-                wrap: word-wrap;
-            }
-        }
+        items: root.trash-list;
+        close-overlay => { root.trash-closed(); }
+        restore(i) => { root.trash-restore(i); }
+        purge(i) => { root.trash-purge(i); }
     }
 
-    // —— 设置整页：与主三框互斥切换，进入即重建；提供商页双向链到本窗口属性 ——
-    if root.settings-page : SettingsPage {
+    // —— 设置整页：与主三框互斥切换；进入即重建（tab/人设编辑态回初值），
+    // 页面组件属性直连本窗口（单层接线，无中间透传层） ——
+    if root.settings-page : settings-vl := VerticalLayout {
         x: 0;
         y: root.caption-height;
         width: root.width;
         height: root.content-height;
-        provs: root.provs;
-        prov-sel <=> root.prov-sel;
-        prov-name <=> root.prov-name;
-        prov-base <=> root.prov-base;
-        prov-suffix <=> root.prov-suffix;
-        prov-key <=> root.prov-key;
-        prov-api <=> root.prov-api;
-        sel-kind: root.sel-kind;
-        sel-locked: root.sel-locked;
-        sel-active: root.sel-active;
-        sel-deleted: root.sel-deleted;
-        prov-status: root.prov-status;
-        prov-models: root.prov-models;
-        remote-models: root.remote-models;
-        remote-loading: root.remote-loading;
-        prov-fetch => { root.prov-fetch(); }
-        prov-model-added(id) => { root.prov-model-added(id); }
-        prov-model-custom(id, alias) => { root.prov-model-custom(id, alias); }
-        prov-model-alias(id, alias) => { root.prov-model-alias(id, alias); }
-        prov-model-commit(id) => { root.prov-model-commit(id); }
-        prov-model-cap(id, cap, on) => { root.prov-model-cap(id, cap, on); }
-        prov-model-removed(id) => { root.prov-model-removed(id); }
-        prov-created(k) => { root.prov-created(k); }
-        prov-selected(id) => { root.prov-selected(id); }
-        prov-used => { root.prov-used(); }
-        prov-saved => { root.prov-saved(); }
-        prov-deleted => { root.prov-deleted(); }
-        prov-restored => { root.prov-restored(); }
-        prov-purged => { root.prov-purged(); }
-        prov-tested => { root.prov-tested(); }
-        asts: root.asts;
-        ast-sel <=> root.ast-sel;
-        ast-name <=> root.ast-name;
-        ast-prompt <=> root.ast-prompt;
-        ast-temp <=> root.ast-temp;
-        ast-opening <=> root.ast-opening;
-        ast-model <=> root.ast-model;
-        ast-avatar: root.ast-avatar;
-        ast-avatar-img: root.ast-avatar-img;
-        ast-avatar-color: root.ast-avatar-color;
-        ast-initial: root.ast-initial;
-        sel-ast-default: root.sel-ast-default;
-        sel-ast-deleted: root.sel-ast-deleted;
-        ast-status: root.ast-status;
-        ast-models: root.models;
-        ast-created => { root.ast-created(); }
-        ast-selected(id) => { root.ast-selected(id); }
-        ast-saved => { root.ast-saved(); }
-        ast-deleted => { root.ast-deleted(); }
-        ast-restored => { root.ast-restored(); }
-        ast-purged => { root.ast-purged(); }
-        ast-defaulted => { root.ast-defaulted(); }
-        ast-avatar-picked => { root.ast-avatar-picked(); }
-        ast-avatar-cleared => { root.ast-avatar-cleared(); }
-        init-user-persona: root.cfg-user-persona;
-        status: root.cfg-status;
-        saved(persona) => { root.settings-saved(persona); }
-        back => { root.settings-back(); }
+        padding: 14px;
+        spacing: 12px;
+        // 当前分区页 + 用户人设编辑态（跨页存续，初值 = 注入的落盘配置）
+        property <int> tab: 0;
+        property <string> ed-persona: root.cfg-user-persona;
+        // 自动保存：changed 首求值时两属性同源相等 → 进页不误写；此后每次差值即落库
+        property <string> ed-persona-saved: root.cfg-user-persona;
+        changed ed-persona => {
+            if ed-persona != ed-persona-saved {
+                ed-persona-saved = ed-persona;
+                root.settings-saved(ed-persona);
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            vertical-stretch: 1;
+
+            SettingsNav {
+                width: Metrics.rail-width(root.width);
+                page: settings-vl.tab;
+                page-picked(n) => { settings-vl.tab = n; }
+                back => { root.settings-back(); }
+            }
+
+            if settings-vl.tab == 0 : ThemePage {
+                horizontal-stretch: 1;
+            }
+
+            if settings-vl.tab == 1 : ProvPage {
+                horizontal-stretch: 1;
+                win-width: root.width;
+                provs: root.provs;
+                prov-sel <=> root.prov-sel;
+                prov-name <=> root.prov-name;
+                prov-base <=> root.prov-base;
+                prov-suffix <=> root.prov-suffix;
+                prov-key <=> root.prov-key;
+                prov-api <=> root.prov-api;
+                sel-kind: root.sel-kind;
+                sel-locked: root.sel-locked;
+                sel-deleted: root.sel-deleted;
+                prov-status: root.prov-status;
+                prov-models: root.prov-models;
+                remote-models: root.remote-models;
+                remote-loading: root.remote-loading;
+                prov-fetch => { root.prov-fetch(); }
+                prov-model-added(id) => { root.prov-model-added(id); }
+                prov-model-custom(id, alias) => { root.prov-model-custom(id, alias); }
+                prov-model-alias(id, alias) => { root.prov-model-alias(id, alias); }
+                prov-model-commit(id) => { root.prov-model-commit(id); }
+                prov-model-cap(id, cap, on) => { root.prov-model-cap(id, cap, on); }
+                prov-model-removed(id) => { root.prov-model-removed(id); }
+                prov-created(k) => { root.prov-created(k); }
+                prov-selected(id) => { root.prov-selected(id); }
+                prov-toggled(id) => { root.prov-toggled(id); }
+                prov-autosave => { root.prov-autosave(); }
+                prov-restored => { root.prov-restored(); }
+                prov-purged(id) => { root.prov-purged(id); }
+                prov-tested => { root.prov-tested(); }
+            }
+
+            if settings-vl.tab == 2 : UserPage {
+                horizontal-stretch: 1;
+                persona <=> settings-vl.ed-persona;
+            }
+
+            if settings-vl.tab == 3 : AstPage {
+                horizontal-stretch: 1;
+                win-width: root.width;
+                asts: root.asts;
+                ast-sel <=> root.ast-sel;
+                ast-name <=> root.ast-name;
+                ast-prompt <=> root.ast-prompt;
+                ast-temp <=> root.ast-temp;
+                ast-opening <=> root.ast-opening;
+                ast-model <=> root.ast-model;
+                ast-avatar: root.ast-avatar;
+                ast-avatar-img: root.ast-avatar-img;
+                ast-avatar-color: root.ast-avatar-color;
+                ast-initial: root.ast-initial;
+                sel-ast-default: root.sel-ast-default;
+                sel-ast-deleted: root.sel-ast-deleted;
+                ast-status: root.ast-status;
+                ast-models: root.models;
+                ast-created => { root.ast-created(); }
+                ast-selected(id) => { root.ast-selected(id); }
+                ast-autosave => { root.ast-autosave(); }
+                ast-restored => { root.ast-restored(); }
+                ast-purged(id) => { root.ast-purged(id); }
+                ast-defaulted(id) => { root.ast-defaulted(id); }
+                ast-avatar-picked => { root.ast-avatar-picked(); }
+                ast-avatar-cleared => { root.ast-avatar-cleared(); }
+            }
+        }
+
+        // visible 只免渲染不免布局占位 → 条件子项用 if 块；状态回显在提供商页不出现（卡内自带）
+        if root.cfg-status != "" && settings-vl.tab != 1 : Text {
+            text: root.cfg-status;
+            color: Theme.p.link;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
     }
 
     // 标题栏 z 序最后绘制：盖在回收站遮罩之上，任何页面都能窗控
@@ -563,6 +402,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.caption-height;
         is-maximized: root.maximized;
+        page-label: root.settings-page ? "设置" : "聊天";
         win-minimize => { root.win-minimize(); }
         win-maximize => { root.win-maximize(); }
         // 关闭直接走 WindowItem.close()：触发 close-requested，默认销毁窗口退出事件循环

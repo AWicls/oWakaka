@@ -1,10 +1,11 @@
 // 输入区卡片：无框自绘编辑器（ScrollView + TextInput）+ 模型切换/Thinking/发送停止按钮行。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icon, OptionRow } from "theme.slint";
+import { Theme, Icon, IconKind, OptionRow } from "../theme.slint";
 
-/// 模型切换下拉的一行数据源：模型 ID + 显示名（别名或原 ID）+ 是否当前激活
+/// 模型切换下拉的一行数据源：提供商 id + 模型 ID + 显示名（别名或原 ID，跨家撞 id 加厂商后缀）+ 是否当前激活
 export struct ModelItem {
+    prov: string,
     id: string,
     display: string,
     current: bool,
@@ -23,7 +24,7 @@ export component InputArea inherits Rectangle {
     callback send-submit(string);
     callback stop-request();
     callback thinking-toggled();
-    callback model-picked(string); // 选择模型（Rust 侧切换 + 回写 config）
+    callback model-picked(string, string); // 选择模型（提供商 id, 模型 id）→ Rust 隐式路由+回写
     callback models-requested(); // 打开下拉时请求刷新远端模型清单
 
     background: Theme.p.panelBg;
@@ -131,7 +132,7 @@ export component InputArea inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 14px;
                 height: 14px;
-                which: 4;
+                kind: IconKind.chevron;
                 ink: Theme.p.textMuted;
             }
         }
@@ -235,7 +236,7 @@ export component InputArea inherits Rectangle {
                     label: m.display;
                     selected: m.current;
                     picked => {
-                        root.model-picked(m.id);
+                        root.model-picked(m.prov, m.id);
                         root.model-menu-open = false;
                     }
                 }

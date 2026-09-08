@@ -1,0 +1,44 @@
+// 设置导航卡：左竖栏四类目（界面设定/LLM 提供商/用户设定/AI 助手设定）
+// + 左下角返回钮（与聊天侧栏底栏 IconButton 同形态）。
+// 页面本体按域拆分：settings_prov.slint / settings_ast.slint / settings_basic.slint，
+// 整页装配（页切换、状态行、保存行）在 app.slint 的设置 if-block。
+
+import { Theme, IconKind, Card } from "../theme.slint";
+import { NavItem, IconButton } from "../common/controls.slint";
+
+/// 设置导航卡：page 由宿主持有（0 界面设定 | 1 LLM 提供商 | 2 用户设定 | 3 AI 助手设定）
+export component SettingsNav inherits Card {
+    in property <int> page;
+    callback page-picked(int);
+    callback back();
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 4px;
+        NavItem {
+            label: "界面设定";
+            selected: root.page == 0;
+            picked => { root.page-picked(0); }
+        }
+        NavItem {
+            label: "LLM 提供商";
+            selected: root.page == 1;
+            picked => { root.page-picked(1); }
+        }
+        NavItem {
+            label: "用户设定";
+            selected: root.page == 2;
+            picked => { root.page-picked(2); }
+        }
+        NavItem {
+            label: "AI 助手设定";
+            selected: root.page == 3;
+            picked => { root.page-picked(3); }
+        }
+        Rectangle { vertical-stretch: 1; }
+        IconButton {
+            icon: IconKind.arrow-left;
+            clicked => { root.back(); }
+        }
+    }
+}

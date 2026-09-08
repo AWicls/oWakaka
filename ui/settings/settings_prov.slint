@@ -1,0 +1,677 @@
+// LLM 提供商页（设置域）：左列表卡 + 右详情卡 + 新增菜单 + 远端模型清单弹层。
+// 数据以 Rust 侧 providers 整包为真相源（in-out 双向链，操作即时回注）；
+// 页面级状态（新增菜单/远端弹层/自定义行/模型编辑行）随本页销毁重建。
+// 装配与页切换见 app.slint 设置块。
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Card, Metrics } from "../theme.slint";
+import {
+    FieldRow,
+    Pill,
+    MenuOpt,
+    RailItem,
+    RailRow,
+    Modal,
+} from "../common/controls.slint";
+
+/// 模型管理行：当前提供商已配置的模型（含能力位）
+export struct ModelRow {
+    id: string,
+    alias: string,
+    thinking: bool,
+    vision: bool,
+    audio: bool,
+    video: bool,
+    tools: bool,
+}
+
+/// 远端拉取到的模型（added = 本提供商已收录）
+export struct RemoteRow {
+    id: string,
+    added: bool,
+}
+
+/// 能力开关胶囊（点击切换；选中态强调色）
+component CapChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback toggled();
+
+    height: 22px;
+    width: lbl.preferred-width + 16px;
+    border-radius: 11px;
+    border-width: 1px;
+    border-color: root.on ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
+    background: root.on ? Theme.p.accentSoftBg : transparent;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+
+    lbl := Text {
+        x: 8px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.on ? Theme.p.link : Theme.p.textMuted;
+        font-size: 11px;
+    }
+}
+
+/// 模型管理行：两行常显——名称行（别名优先，请求 ID 灰色后缀，「别名」编辑钮 + 「−」）
+/// + 能力行（胶囊直接勾选）。点「别名」仅把名称行切成输入态。
+component ModelCard inherits Rectangle {
+    in property <ModelRow> mdl;
+    in property <bool> editing;
+    callback alias-changed(string);
+    callback cap(int, bool);
+    callback remove-request();
+    callback edit-requested();
+    callback edit-done();
+
+    height: 58px;
+    border-radius: 6px;
+    background: transparent;
+    VerticalLayout {
+        padding: 3px;
+        spacing: 2px;
+        HorizontalLayout {
+            height: 24px;
+            spacing: 6px;
+            // 别名（有则常显，编辑态也不藏）；if 块收起不占位不吃 spacing（visible 会）
+            if root.mdl.alias != "": Text {
+                text: root.mdl.alias;
+                color: Theme.p.textPrimary;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            // 请求 ID：恒显（编辑态也不藏），无别名时升为主色
+            Text {
+                text: root.mdl.id;
+                color: root.mdl.alias != "" ? Theme.p.textMuted : Theme.p.textPrimary;
+                font-size: 12px;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            // 编辑态：别名输入框（自带边框，独占剩余宽；visible 门控会与 spacer 平分 stretch）
+            if root.editing: Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 5px;
+                border-width: 1px;
+                border-color: Theme.p.inputBorder;
+                background: Theme.p.windowBg;
+                ti := TextInput {
+                    x: 6px;
+                    y: 0;
+                    width: parent.width - 12px;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    single-line: true;
+                    font-size: 12px;
+                    color: Theme.p.textPrimary;
+                    selection-background-color: Theme.p.accentSoftBg;
+                    text: root.mdl.alias;
+                    edited => { root.alias-changed(ti.text); }
+                }
+
+                Text {
+                    visible: ti.text == "";
+                    x: 6px;
+                    y: 0;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    text: "设置别名（留空显示请求ID）";
+                    color: Theme.p.textMuted;
+                    font-size: 12px;
+                }
+            }
+            if !root.editing: Rectangle {
+                horizontal-stretch: 1;
+            }
+            // 别名 ⇄ 完成：同一按钮原地切换文案/配色
+            Pill {
+                width: 46px;
+                label: root.editing ? "完成" : "别名";
+                primary: root.editing;
+                picked => {
+                    if root.editing {
+                        root.edit-done();
+                    } else {
+                        root.edit-requested();
+                    }
+                }
+            }
+
+            Pill {
+                width: 30px;
+                label: "−";
+                picked => { root.remove-request(); }
+            }
+        }
+        // —— 能力行：常显直切 ——
+        HorizontalLayout {
+            height: 22px;
+            spacing: 4px;
+            CapChip {
+                label: "思考";
+                on: root.mdl.thinking;
+                toggled => { root.cap(0, !root.mdl.thinking); }
+            }
+
+            CapChip {
+                label: "图片";
+                on: root.mdl.vision;
+                toggled => { root.cap(1, !root.mdl.vision); }
+            }
+
+            CapChip {
+                label: "语音";
+                on: root.mdl.audio;
+                toggled => { root.cap(2, !root.mdl.audio); }
+            }
+
+            CapChip {
+                label: "视频";
+                on: root.mdl.video;
+                toggled => { root.cap(3, !root.mdl.video); }
+            }
+
+            CapChip {
+                label: "工具";
+                on: root.mdl.tools;
+                toggled => { root.cap(4, !root.mdl.tools); }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+    }
+}
+
+export component ProvPage inherits Rectangle {
+    // 宿主窗口宽（侧栏宽度公式用；不可引用自身 root.width——本页宽由布局给，成环）
+    in property <length> win-width;
+    // —— 提供商整包（Rust 注入/回注；密钥框恒注空，提交空 = 不改已存） ——
+    in property <[RailItem]> provs;
+    in-out property <string> prov-sel;      // 正在编辑的条目 id（空 = 无可用）
+    in-out property <string> prov-name;
+    in-out property <string> prov-base;
+    in-out property <string> prov-suffix;
+    in-out property <string> prov-key;
+    in-out property <int> prov-api;         // 0 chat | 1 responses
+    in property <string> sel-kind;          // 当前条目厂商显示名
+    in property <bool> sel-locked;          // 定制提供商：接口族锁定
+    in property <bool> sel-deleted;         // 当前条目已逻辑删除
+    in property <string> prov-status;       // 状态行（测试/保存回显）
+    // —— 模型管理 ——
+    in property <[ModelRow]> prov-models;
+    in property <[RemoteRow]> remote-models;
+    in property <bool> remote-loading;
+    callback prov-fetch();
+    callback prov-model-added(string);
+    callback prov-model-custom(string, string);
+    callback prov-model-alias(string, string);
+    callback prov-model-commit(string); // 「完成」收起后统一回刷标签/下拉
+    callback prov-model-cap(string, int, bool);
+    callback prov-model-removed(string);
+    callback prov-created(int);            // 新增菜单选择：0 通用兼容 | 1 小米 MiMo
+    callback prov-selected(string);        // 点列表项 → Rust 回注详情
+    callback prov-autosave();              // 表单任一改动逐键落库（不回注入）
+    callback prov-toggled(string);         // 启用/禁用（带 id；禁用当前路由项自动回落）
+    callback prov-purged(string);          // 竖栏两步确认/底栏彻底删除（带 id，物理删不可逆）
+    callback prov-restored();              // 恢复（仅历史软删条目）
+    callback prov-tested();                // 测试连通（用表单当前值）
+
+    property <bool> add-menu: false;       // 新增提供商弹层
+    property <bool> remote-open: false;    // 远端模型清单弹层（拉取按钮开启，遮罩关闭）
+    property <bool> custom-open: false;    // 自定义模型输入行（「自定义」按钮开合）
+    property <string> mdl-edit: "";        // 正在编辑的模型行 id（同屏仅一行）
+    property <string> del-armed: "";       // 竖栏处于「确认删除」态的条目 id（空 = 无）
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        prov-list := Card {
+            width: Metrics.rail-width(root.win-width);
+            VerticalLayout {
+                padding: 8px;
+                spacing: 4px;
+                Pill {
+                    label: "＋ 新增";
+                    picked => { root.add-menu = true; }
+                }
+
+                for pr in root.provs: RailRow {
+                    item: pr;
+                    current: pr.id == root.prov-sel;
+                    // 启停钮：启用中的家显「禁用」，其余显「启用」（已删行不显）
+                    action-label: pr.deleted ? "" : (pr.enabled ? "禁用" : "启用");
+                    can-delete: !pr.deleted;
+                    delete-armed: root.del-armed == pr.id;
+                    clicked => {
+                        root.prov-selected(pr.id);
+                        root.mdl-edit = "";
+                        root.custom-open = false;
+                        root.del-armed = "";
+                    }
+                    action-picked => { root.prov-toggled(pr.id); }
+                    delete-picked => {
+                        if root.del-armed == pr.id {
+                            root.del-armed = "";
+                            root.prov-purged(pr.id);
+                        } else {
+                            root.del-armed = pr.id;
+                        }
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+            }
+            // 新增弹层：卡内锚「＋ 新增」正下方（后于布局声明 = 盖在上层）
+            if root.add-menu: Rectangle {
+                x: 6px;
+                y: 42px;
+                width: parent.width - 12px;
+                height: 76px;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.p.inputBorder;
+                background: Theme.p.panelBg;
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 0;
+                    MenuOpt {
+                        label: "自定义";
+                        picked => {
+                            root.add-menu = false;
+                            root.prov-created(0);
+                        }
+                    }
+
+                    MenuOpt {
+                        label: "Xiaomi MiMo";
+                        picked => {
+                            root.add-menu = false;
+                            root.prov-created(1);
+                        }
+                    }
+                }
+            }
+        }
+
+        Card {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+
+                // 表单主体整体可滚：窗口过矮时滚动可见全部内容（底栏按钮不随滚）；
+                // 模型列表随内容增高，不再 stretch 成大片空框
+                ScrollView {
+                    vertical-stretch: 1;
+                    viewport-width: self.visible-width;
+                    horizontal-scrollbar-policy: always-off;
+                    vertical-scrollbar-policy: always-on;
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            text: root.prov-sel == "" ? "提供商"
+                                : (root.sel-deleted ? "已删除的提供商" : "编辑提供商");
+                            color: Theme.p.textPrimary;
+                            font-size: 14px;
+                        }
+
+                        if root.prov-sel == "": Text {
+                            text: "还没有可用的提供商：点左上「＋ 新增」创建第一个。";
+                            color: Theme.p.textMuted;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+
+                        if root.prov-sel != "": FieldRow {
+                            label: "显示名（留空 = 用厂商标签）";
+                            text <=> root.prov-name;
+                            hint: root.sel-kind;
+                            edited(t) => { root.prov-name = t; root.prov-autosave(); }
+                        }
+                        // 基础地址与路径后缀并排（2:1 分宽）
+                        if root.prov-sel != "": HorizontalLayout {
+                            spacing: 8px;
+                            height: 52px;
+                            FieldRow {
+                                horizontal-stretch: 2;
+                                label: "基础地址（custom 必填；定制厂商留空 = 内置端点）";
+                                text <=> root.prov-base;
+                                hint: "https://api.openai.com/v1";
+                                edited(t) => { root.prov-base = t; root.prov-autosave(); }
+                            }
+
+                            FieldRow {
+                                horizontal-stretch: 1;
+                                label: "路径后缀（可选）";
+                                text <=> root.prov-suffix;
+                                hint: "如 proxy/aigw，可留空";
+                                edited(t) => { root.prov-suffix = t; root.prov-autosave(); }
+                            }
+                        }
+                        if root.prov-sel != "": FieldRow {
+                            label: "API 密钥（留空 = 保持已存值不变；只存 config.toml，不进 DB）";
+                            text <=> root.prov-key;
+                            hint: "sk-...";
+                            edited(t) => { root.prov-key = t; root.prov-autosave(); }
+                        }
+
+                        if root.prov-sel != "": Text {
+                            text: "接入方案";
+                            color: Theme.p.textMuted;
+                            font-size: 12px;
+                        }
+                        if root.prov-sel != "" && !root.sel-locked: HorizontalLayout {
+                            spacing: 8px;
+                            height: 30px;
+                            Pill {
+                                width: 120px;
+                                label: "chat";
+                                selected: root.prov-api == 0;
+                                picked => {
+                                    root.prov-api = 0;
+                                    root.prov-autosave();
+                                }
+                            }
+
+                            Pill {
+                                width: 120px;
+                                label: "responses";
+                                selected: root.prov-api == 1;
+                                picked => {
+                                    root.prov-api = 1;
+                                    root.prov-autosave();
+                                }
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        if root.prov-sel != "" && root.sel-locked: Text {
+                            text: "responses（定制提供商锁定）";
+                            color: Theme.p.textSecondary;
+                            font-size: 13px;
+                        }
+
+                        // —— 模型管理 ——
+                        // 模型框是弹性区：最少两行、最大吃满富余高（框内自滚），
+                        // 其余元素恒全显；窗口矮于内容最小高时外层 ScrollView 才可滚
+                        if root.prov-sel != "" && !root.sel-deleted: VerticalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: "可用模型";
+                                color: Theme.p.textMuted;
+                                font-size: 12px;
+                            }
+
+                            Rectangle {
+                                min-height: 128px; // 两行模型（58 行高+2 间距+padding）
+                                vertical-stretch: 1;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.p.inputBorder;
+                                background: Theme.p.windowBg;
+                                clip: true;
+                                if root.prov-models.length == 0: Text {
+                                    text: "还没有模型：右下「拉取远端」或「自定义」添加。";
+                                    color: Theme.p.textMuted;
+                                    font-size: 12px;
+                                    x: 8px;
+                                    y: 8px;
+                                    wrap: word-wrap;
+                                    width: parent.width - 16px;
+                                }
+                                ScrollView {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    viewport-width: self.visible-width;
+                                    viewport-height: root.prov-models.length * 60px + 6px;
+                                    VerticalLayout {
+                                        padding: 4px;
+                                        spacing: 2px;
+                                        for m in root.prov-models: ModelCard {
+                                            mdl: m;
+                                            editing: root.mdl-edit != "" && root.mdl-edit == m.id;
+                                            edit-requested => { root.mdl-edit = m.id; }
+                                            edit-done => {
+                                                root.mdl-edit = "";
+                                                root.prov-model-commit(m.id);
+                                            }
+                                            alias-changed(a) => { root.prov-model-alias(m.id, a); }
+                                            cap(which, on) => { root.prov-model-cap(m.id, which, on); }
+                                            remove-request => { root.prov-model-removed(m.id); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                height: 30px;
+                                Pill {
+                                    width: 88px;
+                                    label: "测试连通";
+                                    picked => { root.prov-tested(); }
+                                }
+                                // 测试/操作结果就地回显在按钮右侧（超长省略号）
+                                if root.prov-status != "": Text {
+                                    horizontal-stretch: 1;
+                                    text: root.prov-status;
+                                    color: Theme.p.link;
+                                    font-size: 12px;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                                if root.prov-status == "": Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                                Pill {
+                                    width: 72px;
+                                    label: "自定义";
+                                    selected: root.custom-open;
+                                    picked => { root.custom-open = !root.custom-open; }
+                                }
+
+                                Pill {
+                                    width: 84px;
+                                    label: "拉取远端";
+                                    selected: root.remote-loading;
+                                    picked => {
+                                        root.remote-open = true;
+                                        root.prov-fetch();
+                                    }
+                                }
+                            }
+                            // 自定义输入行（「自定义」按钮开合；新建即一条普通模型，与拉取殊途同归）
+                            if root.custom-open: HorizontalLayout {
+                                spacing: 6px;
+                                height: 26px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    min-width: 100px;
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: Theme.p.inputBorder;
+                                    background: Theme.p.windowBg;
+                                    ci := TextInput {
+                                        x: 6px;
+                                        y: 0;
+                                        width: parent.width - 12px;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        font-size: 12px;
+                                        color: Theme.p.textPrimary;
+                                        selection-background-color: Theme.p.accentSoftBg;
+                                    }
+
+                                    Text {
+                                        visible: ci.text == "";
+                                        x: 6px;
+                                        y: 0;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        text: "模型请求 ID";
+                                        color: Theme.p.textMuted;
+                                        font-size: 12px;
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: Math.max(90px, root.win-width * 0.1);
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: Theme.p.inputBorder;
+                                    background: Theme.p.windowBg;
+                                    ca := TextInput {
+                                        x: 6px;
+                                        y: 0;
+                                        width: parent.width - 12px;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        font-size: 12px;
+                                        color: Theme.p.textPrimary;
+                                        selection-background-color: Theme.p.accentSoftBg;
+                                    }
+
+                                    Text {
+                                        visible: ca.text == "";
+                                        x: 6px;
+                                        y: 0;
+                                        height: parent.height;
+                                        vertical-alignment: center;
+                                        text: "别名（可选）";
+                                        color: Theme.p.textMuted;
+                                        font-size: 12px;
+                                    }
+                                }
+
+                                Pill {
+                                    width: 48px;
+                                    label: "添加";
+                                    primary: true;
+                                    picked => {
+                                        root.prov-model-custom(ci.text, ca.text);
+                                        ci.text = "";
+                                        ca.text = "";
+                                        root.custom-open = false;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 已删条目专属反馈行（模型框内状态随块隐藏，这里补位）
+                        if root.sel-deleted && root.prov-status != "": Text {
+                            text: root.prov-status;
+                            color: Theme.p.link;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        // 尾部 filler 仅在模型区隐藏时补位（防定高子项摊开）；
+                        // 模型区可见时富余高归模型框独吞
+                        if root.prov-sel == "" || root.sel-deleted: Rectangle {
+                            vertical-stretch: 1;
+                        }
+                    }
+                }
+
+                // 固定底栏（不随滚动）：仅历史软删条目的善后动作。
+                // 「删除/启停」已移竖栏行内；路由随聊天下拉选模型隐式切换；逐键自动保存
+                if root.prov-sel != "" && root.sel-deleted: HorizontalLayout {
+                    spacing: 8px;
+                    height: 30px;
+                    Pill {
+                        width: 72px;
+                        label: "彻底删除";
+                        picked => { root.prov-purged(root.prov-sel); }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    Pill {
+                        width: 72px;
+                        label: "恢复";
+                        picked => { root.prov-restored(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // —— 远端模型清单弹层：居中于本页区（＋收录；已收录灰显，遮罩关闭） ——
+    if root.remote-open: Modal {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        title: "远端模型清单";
+        card-max-width: 360px;
+        close-requested => { root.remote-open = false; }
+
+        if root.remote-loading: Text {
+            text: "拉取中…（改地址/密钥后请重开设置再拉）";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        if !root.remote-loading && root.remote-models.length == 0: Text {
+            text: "暂无清单：点「拉取远端」按当前表单的端点与密钥请求 /models。";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: Theme.p.windowBg;
+            clip: true;
+            ScrollView {
+                width: parent.width;
+                height: parent.height;
+                viewport-width: self.visible-width;
+                vertical-scrollbar-policy: always-on;
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+                    for r in root.remote-models: HorizontalLayout {
+                        height: 26px;
+                        spacing: 6px;
+                        Text {
+                            text: r.id;
+                            horizontal-stretch: 1;
+                            color: r.added ? Theme.p.textMuted : Theme.p.textPrimary;
+                            font-size: 12px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        Pill {
+                            width: 44px;
+                            label: r.added ? "已收录" : "＋";
+                            selected: !r.added;
+                            picked => {
+                                if !r.added { root.prov-model-added(r.id); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

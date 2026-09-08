@@ -2,7 +2,8 @@
 //（含左下角主题切换按钮与弹出菜单）。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icon, OptionRow } from "theme.slint";
+import { Theme, Icon, IconKind, OptionRow } from "../theme.slint";
+import { IconButton } from "../common/controls.slint";
 
 /// 侧栏一行数据源：会话标题 + 是否选中。
 export struct SessionItem {
@@ -47,13 +48,13 @@ component SessionRow inherits Rectangle {
             font-size: 13px;
             overflow: elide;
         }
-        // 删除叉号：复用 Icon which 11（✕ 字形在默认字体缺字成豆腐块）；悬停才实例化
+        // 删除叉号：复用 Icon cross（✕ 字形在默认字体缺字成豆腐块）；悬停才实例化
         if ta.has-hover : Icon {
             width: 14px;
             height: 14px;
             x: parent.width - 22px;
             y: (parent.height - self.height) / 2;
-            which: 11;
+            kind: IconKind.cross;
             ink: Theme.p.textMuted;
         }
     }
@@ -120,46 +121,14 @@ export component SessionSidebar inherits Rectangle {
         bottom-row := HorizontalLayout {
             spacing: 4px;
             height: 34px;
-            Rectangle {
-                width: 40px;
-                height: 34px;
-                border-radius: 8px;
-                background: stb.has-hover ? Theme.p.listHover : transparent;
-                stb := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    mouse-cursor: pointer;
-                    clicked => { root.settings-clicked(); }
-                }
-                Icon {
-                    x: 12px;
-                    y: (parent.height - self.height) / 2;
-                    width: 16px;
-                    height: 16px;
-                    which: 5; // 设置滑杆
-                    ink: Theme.p.textSecondary;
-                }
+            IconButton {
+                icon: IconKind.sliders;
+                clicked => { root.settings-clicked(); }
             }
-            theme-btn := Rectangle {
-                width: 40px;
-                height: 34px;
-                border-radius: 8px;
-                background: tb.has-hover ? Theme.p.listHover : transparent;
-                tb := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    mouse-cursor: pointer;
-                    clicked => { root.menu-open = !root.menu-open; }
-                }
-                Icon {
-                    x: 12px;
-                    y: (parent.height - self.height) / 2;
-                    width: 16px;
-                    height: 16px;
-                    // 0 太阳 | 1 月亮 | 2 跟随系统
-                    which: Theme.mode == 0 ? 0 : Theme.mode == 1 ? 1 : 2;
-                    ink: Theme.p.textSecondary;
-                }
+            theme-btn := IconButton {
+                icon: Theme.mode == 0 ? IconKind.sun
+                    : Theme.mode == 1 ? IconKind.moon : IconKind.monitor;
+                clicked => { root.menu-open = !root.menu-open; }
             }
             // 回收站入口（垃圾桶图元；有删剩会话时右侧显计数并高亮）
             Rectangle {
@@ -179,7 +148,7 @@ export component SessionSidebar inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     width: 16px;
                     height: 16px;
-                    which: 7; // 垃圾桶
+                    kind: IconKind.trash;
                     ink: root.trash-count > 0 ? Theme.p.link : Theme.p.textSecondary;
                 }
                 if root.trash-count > 0 : Text {
@@ -219,7 +188,7 @@ export component SessionSidebar inherits Rectangle {
             spacing: 0;
             OptionRow {
                 row-height: 34px;
-                icon: 0;
+                icon: IconKind.sun;
                 label: "浅色";
                 selected: Theme.mode == 0;
                 picked => {
@@ -229,7 +198,7 @@ export component SessionSidebar inherits Rectangle {
             }
             OptionRow {
                 row-height: 34px;
-                icon: 1;
+                icon: IconKind.moon;
                 label: "深色";
                 selected: Theme.mode == 1;
                 picked => {
@@ -239,7 +208,7 @@ export component SessionSidebar inherits Rectangle {
             }
             OptionRow {
                 row-height: 34px;
-                icon: 2;
+                icon: IconKind.monitor;
                 label: "跟随系统";
                 selected: Theme.mode == 2;
                 picked => {

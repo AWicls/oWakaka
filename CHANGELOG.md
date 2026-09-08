@@ -7,6 +7,23 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-08
+
+### Changed
+- 提供商改**多家启用 + 下拉隐式路由**：`ProviderEntry` 新增 `enabled`（旧档案缺字段视为启用）。竖栏每行「删除」左侧加「启用/禁用」开关——禁用 = 暂离线（灰显、副行「已禁用」、不进聊天模型下拉、不可被路由）；禁用当前路由项自动回落到下一个可用提供商。**撤「使用此提供商」按钮**（`sel-active`/`prov-used` 一并移除）：首家创建自动启用+激活，「添加了就是能用的」。聊天模型下拉改为**聚合所有启用提供商**的模型（跨家同 id 撞车加「 · 提供商名」后缀区分），选中哪家模型即隐式把路由切到该家（内部维护 `active`+`active_model`，单活运行时无感复用、发送清缓存重建客户端）；助手默认模型按 id 反查可用提供商来路由。竖栏删除确认态文案由「确认彻底删除」改**红字「确认删除」**；助手行「删除」左侧加「默认」钮（点谁设谁为默认助手，仅非默认行显示）
+- LLM 提供商与 AI 助手页改**竖栏行内两步删除 + 逐键自动保存**：「删除」从详情卡固定底栏移入左竖栏每行（`RailRow` 新增可选删除钮；已删行、默认助手行不显），首次点击变强调色「确认删除」、再击软删，点行切换即撤销确认态；回调改带 id，可删任意行——删非选中行只刷列表，不劫持当前编辑目标。底栏撤「删除」「完成」，仅留本条目动作（使用此提供商／恢复／彻底删除／设为默认）。表单任一改动**即落库且不回注入**（防打字失焦、密钥框被清空），只局部刷竖栏列表行；半截无效态静默跳过（custom 地址空、名称空、已删条目），温度暂不可解析仅回显提示不落盘。头像选图/清除即时直写 DB 单字段；`FieldRow`/`PromptRow` 新增 `edited` 透传回调（Rust 注入不触发）
+- 用户设定页改**自动保存**：撤除宿主底栏「保存」按钮，人设编辑框每次变化即落库（persona user 活跃行），状态行回显「已自动保存，下一次发送生效」。防误写：进页首求值与基准同源相等不触发，仅真实编辑触发；逐键直写 SQLite 单行 upsert，未加防抖（量级不需要）
+- 设置域左竖栏宽度统一：新增 `theme.slint` `Metrics.rail-width()` 布局度量（`public pure function`），导航卡与提供商/助手列表卡三处原各自 `Math.max/min` 公式（104–150 / 120–180）收敛为同一来源（150–210，随窗宽 18%），与聊天侧栏默认 190px 同量级
+- UI 逻辑层按三个界面域分级归位（内部重构，行为等价；`fmt`/`clippy`/`test` 全绿）：`src/ui/` 根下平铺的 7 个模块 → `frame.rs`（边框）+ `chat.rs` + `chat/{host,session,bubbles,models}.rs`（聊天）+ `settings.rs` + `settings/{prov,ast}.rs`（设置）。原 563 行 `host.rs` 拆分：多会话簿记留 `chat/host.rs`，会话栏/回收站接线迁 `chat/session.rs`；原 340 行 `settings.rs` 拆分：装配 + 头像小工具留本体，AI 助手页三函数 + 接线迁 `settings/ast.rs`；`prov.rs` 迁入 `settings/`。跨 `chat` 边界的可见性标注由 `pub(super)` 还原为 `pub(in crate::ui)`（等价迁移前语义）
+- 设置域 Slint 文件按页拆分（内部重构，行为等价）：原 1401 行 `settings.slint` → `settings.slint`（导航卡 44 行）+ `settings_prov.slint`（LLM 提供商页 + 模型管理 670 行）+ `settings_ast.slint`（AI 助手页 306 行）+ `settings_basic.slint`（界面设定/用户设定 95 行）；**删除 `SettingsPage` 中间透传层**——app.slint 设置块直挂页面组件（单层接线），页切换状态/用户人设编辑态收归装配层局部。远端模型/默认模型弹层随所属页面挂本页区域（遮罩不再盖导航栏）
+- 设置页导航改版：四个大类更名并重排为「界面设定 / LLM 提供商 / 用户设定 / AI 助手设定」；返回钮从导航卡顶部（箭头+「返回」文字+「设置」标题行）改为**竖栏左下角纯图标**（与聊天侧栏底栏 IconButton 同形态），卡内「设置」标题撤除（页名已由标题栏中央承担）
+- 新增 `ui/controls.slint` 通用控件库并收编重复实现（内部重构，视觉基本无差）：`FieldRow`/`Pill`/`PromptRow`/`MenuOpt`/`NavItem` 自 `settings.slint` 迁入；新增 `IconButton`（侧栏底栏图标钮）、`Avatar`（圆形头像，收编聊天头栏与助手页两份复制）、`Modal`（遮罩+居中卡弹层，回收站/远端模型清单/默认模型三处浮层共用）、`RailItem`+`RailRow`（合并原 `ProvRow`/`AstRow` 两同构 struct 与 `ProvItemRow` 组件）；回收站 `TinyBtn` 并入 `Pill`（高度/宽度参数化）。远端模型清单已收录按钮文案「✓」改「已收录」（默认字体缺字风险横向清扫）
+- UI 三界面（边框/聊天/设置）分级重构第一步：无边框标题栏改版——应用名「oWakaka」左置，栏中央加粗显示当前页名（「聊天」/「设置」，随整页切换）；页名绝对定位横跨整栏、相对窗口真居中（不受右侧最小化/最大化/关闭键组影响），且中央文字不拦截鼠标，拖窗与双击最大化照常
+- 三个「胖入口」文件深度拆分下沉，本体收敛为入口/装配层（纯内部重构，行为与视觉零变化；`cargo fmt`/`clippy`/`test` 全绿）：
+  - `db.rs` 249→166 行：表 DDL、时间戳表达式与版本策略（重建 / 补结构例外）下沉 `db/schema.rs`，`NOW`/`SCHEMA_VERSION` 经 `db.rs` 再导出保持子模块 `use super` 路径不变
+  - `ui.rs` 378→161 行：对话核心接线（`wire_chat`/`wire_timer`、懒建客户端 `ensure_client`、轮次人设组装）下沉 `ui/chat.rs`，`ui.rs` 仅留 `Ctx`、回传类型与 `run()` 装配
+  - `app.slint` 572→379 行：自绘标题栏（`CaptionBar`/`CaptionBtn`）拆出 `caption.slint`、回收站浮层（遮罩 + 居中卡合成 `TrashOverlay`、`TinyBtn`、`TrashItem`）拆出 `trash.slint`，`app.slint` 仅留 `AppWindow` 装配
+
 ### Fixed
 - 双击 release 产物 `oWakaka.exe` 会先弹出一个 cmd 控制台窗口：Rust 可执行目标默认编译为**控制台子系统**，Windows 为其分配控制台。`main.rs` 加 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`——release 切 GUI 子系统（PE Subsystem 实测由 3 变 2），debug 保留控制台以照常看 `cargo run` 的诊断输出。已知代价：release 下 `eprintln!` 类启动提示（如「DB 打开失败，本运行不持久化」）不再可见
 

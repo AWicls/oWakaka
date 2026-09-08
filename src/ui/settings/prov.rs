@@ -14,7 +14,7 @@ use crate::ai::{
 use crate::db::Db;
 use slint::{ComponentHandle, SharedString, VecModel};
 
-use super::{AppWindow, ModelRow, ProvRow, RemoteRow};
+use crate::ui::{AppWindow, ModelRow, RailItem, RemoteRow};
 
 /// 表单 api 序号 ↔ 枚举（0 chat | 1 responses）
 fn api_of(i: i32) -> Api {
@@ -28,22 +28,37 @@ fn api_to_i(api: Api) -> i32 {
     }
 }
 
-/// 重注入提供商列表与详情。select 为空 = 维持当前选中；选中失效回落 active。
-/// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
-pub(super) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
-    let ps = Providers::load(db).unwrap_or_default();
-    let rows: Vec<ProvRow> = ps
-        .list
+/// 竖栏行数据（提供商列表卡的唯一构造点，整包注入与局部刷新共用）。
+fn prov_rail_rows(ps: &Providers) -> Vec<RailItem> {
+    ps.list
         .iter()
-        .map(|e| ProvRow {
+        .map(|e| RailItem {
             id: e.id.as_str().into(),
             name: e.name.as_str().into(),
-            kind: e.kind.display_name().into(),
+            sub: if e.enabled {
+                e.kind.display_name().into()
+            } else {
+                "已禁用".into()
+            },
             active: e.id == ps.active,
+            activeText: "● 使用中".into(),
             deleted: e.deleted,
+            enabled: e.enabled,
         })
-        .collect();
-    window.set_provs(Rc::new(VecModel::from(rows)).into());
+        .collect()
+}
+
+/// 只刷竖栏列表卡（增删改行后不动表单，保住正在输入的焦点）。
+pub(super) fn prov_list_refresh(db: &Db, window: &AppWindow) {
+    let ps = Providers::load(db).unwrap_or_default();
+    window.set_provs(Rc::new(VecModel::from(prov_rail_rows(&ps))).into());
+}
+
+/// 重注入提供商列表与详情。select 为空 = 维持当前选中；选中失效回落 active。
+/// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
+pub(in crate::ui) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
+    let ps = Providers::load(db).unwrap_or_default();
+    window.set_provs(Rc::new(VecModel::from(prov_rail_rows(&ps))).into());
     window.set_remote_models(slint::ModelRc::default()); // 远端清单不跨提供商缓存（端点已变）
     let mut sel = select.to_string();
     if sel.is_empty() {
@@ -62,7 +77,6 @@ pub(super) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
         window.set_prov_api(0);
         window.set_sel_kind("".into());
         window.set_sel_locked(false);
-        window.set_sel_active(false);
         window.set_sel_deleted(false);
         window.set_prov_models(Rc::new(VecModel::<ModelRow>::default()).into());
         return;
@@ -74,7 +88,6 @@ pub(super) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
     window.set_prov_api(api_to_i(e.kind.locked_api().or(e.api).unwrap_or_default()));
     window.set_sel_kind(e.kind.display_name().into());
     window.set_sel_locked(e.kind.locked_api().is_some());
-    window.set_sel_active(sel == ps.active);
     window.set_sel_deleted(e.deleted);
     prov_models_refresh(&ps, window);
 }
@@ -123,8 +136,8 @@ pub(super) fn remote_mark_added(window: &AppWindow, model_id: &str, added: bool)
 }
 
 /// 远端清单异步回包 → 窗口：按「未添加优先 + id 升序」重排注入并复位加载态。
-/// 入参与 [`UiMsg::ProvFetch`] 一致，由 ui.rs 的回流 Timer 转调（页面逻辑归本页）。
-pub(super) fn on_fetch_result(window: &AppWindow, result: Result<Vec<String>, String>) {
+/// 入参与 [`UiMsg::ProvFetch`](crate::ui::UiMsg::ProvFetch) 一致，由 ui.rs 的回流 Timer 转调（页面逻辑归本页）。
+pub(in crate::ui) fn on_fetch_result(window: &AppWindow, result: Result<Vec<String>, String>) {
     use slint::Model;
     match result {
         Ok(ids) => {
@@ -153,7 +166,7 @@ pub(super) fn on_fetch_result(window: &AppWindow, result: Result<Vec<String>, St
 }
 
 /// 连通测试异步回包 → 窗口：文案直接写 prov-status。
-pub(super) fn on_test_result(window: &AppWindow, msg: SharedString) {
+pub(in crate::ui) fn on_test_result(window: &AppWindow, msg: SharedString) {
     window.set_prov_status(msg);
 }
 
@@ -201,20 +214,24 @@ pub(super) fn model_upsert(
     }
 }
 
-/// 「完成」：表单写回对应条目（kind/锁定族不信任 UI 传入）；密钥框非空才更新 `[keys]`。
-pub(super) fn prov_save(db: &Db, window: &AppWindow) -> SharedString {
+/// 自动保存：把表单当前值逐键落库到对应条目（kind/锁定族不信任 UI 传入）；
+/// 密钥框非空才更新 `[keys]`。不回注入（防打字失焦/密钥框被清空），只刷竖栏列表；
+/// 无条目/已删/custom 地址还没敲出来 → 静默跳过（半截态不值得入库报错）。
+pub(super) fn prov_autosave(db: &Db, window: &AppWindow) {
     let id = window.get_prov_sel().to_string();
-    let ps = match Providers::load(db) {
-        Ok(ps) => ps,
-        Err(e) => return format!("读取失败: {e}").into(),
+    if id.is_empty() {
+        return;
+    }
+    let Ok(ps) = Providers::load(db) else {
+        return;
     };
-    let Some(cur) = ps.find(&id).cloned() else {
-        return "条目不存在，请从列表重新选择".into();
+    let Some(cur) = ps.find(&id) else {
+        return;
     };
     if cur.deleted {
-        return "已删除条目：恢复后才能编辑".into();
+        return;
     }
-    let mut e = cur;
+    let mut e = cur.clone();
     e.name = window.get_prov_name().trim().to_string();
     if e.name.is_empty() {
         e.name = e.kind.display_name().to_string();
@@ -226,22 +243,20 @@ pub(super) fn prov_save(db: &Db, window: &AppWindow) -> SharedString {
         None => Some(api_of(window.get_prov_api())),
     };
     if e.kind == Provider::Custom && join_url(&e.base_url, &e.url_suffix).is_empty() {
-        return "自定义提供商必须填基础地址".into();
+        return;
     }
     // models 不在表单保存里动（Step B：行级 upsert/remove 即时落盘）
-    if let Err(err) = Providers::save_entry(db, &e) {
-        return format!("保存失败: {err}").into();
+    if Providers::save_entry(db, &e).is_err() {
+        return;
     }
     let key = window.get_prov_key().trim().to_string();
     if !key.is_empty() {
         let mut secrets: Secrets = load_toml("config.toml").unwrap_or_default();
         secrets.keys.insert(id.clone(), key);
-        if let Err(err) = store_toml(&secrets, "config.toml") {
-            return format!("设置已存，密钥写入失败: {err}").into();
-        }
+        let _ = store_toml(&secrets, "config.toml");
     }
-    prov_inject(db, window, &id);
-    "完成，已保存".into()
+    prov_list_refresh(db, window);
+    window.set_prov_status("已自动保存".into());
 }
 
 /// 用表单当前值（未保存也可测）组装临时视图；缺参则写 prov-status 回 `None`。
@@ -287,7 +302,7 @@ pub(super) fn prov_test_config(db: &Db, window: &AppWindow) -> Option<Config> {
 /// 提供商页接线：列表/详情即时读写 providers 整包（Step A 骨架）＋
 /// Step B 模型管理（拉远端 / ＋添加 / 自定义 / 别名 / 能力勾选 / 移除）。
 /// 回连按钮均重建客户端缓存（下一次发送即用新配置）。
-pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
+pub(in crate::ui) fn wire_prov(window: &AppWindow, ctx: &crate::ui::Ctx) {
     let db = ctx.db.clone();
     let cache = ctx.cache.clone();
     let runtime = ctx.runtime.clone();
@@ -322,26 +337,40 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
             w.set_prov_status(SharedString::default());
         }
     });
-    window.on_prov_used({
+    window.on_prov_toggled({
         let window_weak = window.as_weak();
         let cache = cache.clone();
         let db = db.clone();
-        move || {
+        move |id| {
             let Some(w) = window_weak.upgrade() else {
                 return;
             };
-            let id = w.get_prov_sel().to_string();
-            match Providers::set_active(&db, &id) {
+            let id = id.to_string();
+            let Ok(ps) = Providers::load(&db) else {
+                return;
+            };
+            let Some(on) = ps.find(&id).filter(|e| !e.deleted).map(|e| !e.enabled) else {
+                return;
+            };
+            match Providers::set_enabled(&db, &id, on) {
                 Ok(()) => {
-                    *cache.lock().unwrap() = None; // 下一次发送即用新提供商
-                    prov_inject(&db, &w, &id);
-                    w.set_prov_status("已切换，下一次发送生效".into());
+                    *cache.lock().unwrap() = None; // 禁用当前路由项会触发回落，一律重建客户端
+                    if w.get_prov_sel() == id.as_str() {
+                        prov_inject(&db, &w, &id); // 选中行本身：详情态随之刷新
+                    } else {
+                        prov_list_refresh(&db, &w);
+                    }
+                    w.set_prov_status(if on {
+                        "已启用".into()
+                    } else {
+                        "已禁用".into()
+                    });
                 }
-                Err(e) => w.set_prov_status(format!("切换失败: {e}").into()),
+                Err(e) => w.set_prov_status(format!("启停失败: {e}").into()),
             }
         }
     });
-    window.on_prov_saved({
+    window.on_prov_autosave({
         let window_weak = window.as_weak();
         let cache = cache.clone();
         let db = db.clone();
@@ -349,30 +378,8 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
             let Some(w) = window_weak.upgrade() else {
                 return;
             };
-            let status = prov_save(&db, &w);
+            prov_autosave(&db, &w);
             *cache.lock().unwrap() = None; // 编辑可能改了使用中的条目，重建客户端
-            w.set_prov_status(status);
-        }
-    });
-    window.on_prov_deleted({
-        let window_weak = window.as_weak();
-        let cache = cache.clone();
-        let db = db.clone();
-        move || {
-            let Some(w) = window_weak.upgrade() else {
-                return;
-            };
-            let id = w.get_prov_sel().to_string();
-            if id.is_empty() {
-                return;
-            }
-            match Providers::soft_delete(&db, &id) {
-                Ok(()) => {
-                    *cache.lock().unwrap() = None;
-                    prov_inject(&db, &w, &id); // 留在原条目看"已删除"态
-                }
-                Err(e) => w.set_prov_status(format!("删除失败: {e}").into()),
-            }
         }
     });
     window.on_prov_restored({
@@ -400,19 +407,23 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
         let window_weak = window.as_weak();
         let cache = cache.clone();
         let db = db.clone();
-        move || {
+        move |id| {
             let Some(w) = window_weak.upgrade() else {
                 return;
             };
-            let id = w.get_prov_sel().to_string();
+            let id = id.to_string();
             if id.is_empty() {
                 return;
             }
             match Providers::purge(&db, "config.toml", &id) {
                 Ok(()) => {
                     *cache.lock().unwrap() = None;
-                    prov_inject(&db, &w, ""); // 条目已没了，回注入兜底选中
-                    w.set_prov_status("已彻底删除".into());
+                    if w.get_prov_sel() == id.as_str() {
+                        prov_inject(&db, &w, ""); // 条目已没了，回注入兜底选中
+                        w.set_prov_status("已彻底删除".into());
+                    } else {
+                        prov_list_refresh(&db, &w); // 删的是非选中行：只刷列表，不劫持编辑目标
+                    }
                 }
                 Err(e) => w.set_prov_status(format!("彻底删除失败: {e}").into()),
             }
@@ -444,7 +455,7 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
                         format!("连接失败：{brief}")
                     }
                 };
-                let _ = tx.send(super::UiMsg::ProvTest(msg.into()));
+                let _ = tx.send(crate::ui::UiMsg::ProvTest(msg.into()));
             });
         }
     });
@@ -467,7 +478,7 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
             let tx = tx.clone();
             runtime.spawn(async move {
                 let result = client.list_models().await.map_err(|e| e.to_string());
-                let _ = tx.send(super::UiMsg::ProvFetch(result));
+                let _ = tx.send(crate::ui::UiMsg::ProvFetch(result));
             });
         }
     });

@@ -1,0 +1,102 @@
+// 无边框自绘标题栏：拖拽区（按下发起原生拖窗，双击切最大化）+ 右上角三键
+//（Windows 惯例序：最小化/最大化·还原/关闭，关闭贴右角）。图标一律走 theme.slint Icon
+// 图元自绘——Unicode ✕/❐ 在默认字体下缺字成豆腐块「口」且大小不一。
+import { Theme, Icon, IconKind } from "../theme.slint";
+
+/// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger（关闭）悬停红底白图标；图标复用 theme.slint Icon
+component CaptionBtn inherits Rectangle {
+    in property <IconKind> icon;
+    in property <bool> danger: false;
+    callback picked();
+
+    property <brush> fg: ta.has-hover && root.danger ? white : Theme.p.textSecondary;
+    // 实底按钮色（非悬停=标题栏底色）：还原图标前框用它遮住后框重叠线（作 Icon.fill2）
+    property <brush> btn-bg: ta.has-hover ? (root.danger ? #c42b1c : Theme.p.listHover) : Theme.p.windowBg;
+
+    width: 46px;
+    background: root.btn-bg;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    // 图标收编至 theme.slint Icon（IconKind 枚举直通），不再在此各写一套 Path
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        kind: root.icon;
+        ink: root.fg;
+        fill2: root.btn-bg;
+    }
+}
+
+/// 顶部 34px 标题栏：应用名左置 + 当前页名加粗真居中（绝对定位横跨整栏，
+/// 不参与左右分区布局，右三键宽度不影响其中点）+ 拖拽区 + 右三键。
+/// is-maximized / page-label / 窗控回调由 AppWindow 桥接。
+export component CaptionBar inherits Rectangle {
+    in property <bool> is-maximized;
+    in property <string> page-label;
+    callback win-minimize();
+    callback win-maximize();
+    callback win-close();
+    callback win-drag();
+
+    background: Theme.p.windowBg;
+    HorizontalLayout {
+        spacing: 0px;
+        Rectangle {
+            horizontal-stretch: 1;
+            TouchArea {
+                width: parent.width;
+                height: parent.height;
+                pointer-event(ev) => {
+                    if (ev.button == PointerEventButton.left && ev.kind == PointerEventKind.down) {
+                        root.win-drag();
+                    }
+                }
+                double-clicked => { root.win-maximize(); }
+            }
+
+            Text {
+                x: 10px;
+                y: (parent.height - self.height) / 2;
+                text: "oWakaka";
+                color: Theme.p.textMuted;
+                font-size: 12px;
+            }
+        }
+
+        CaptionBtn {
+            icon: IconKind.minimize;
+            picked => { root.win-minimize(); }
+        }
+
+        CaptionBtn {
+            icon: root.is-maximized ? IconKind.restore : IconKind.maximize;
+            picked => { root.win-maximize(); }
+        }
+
+        CaptionBtn {
+            icon: IconKind.cross;
+            danger: true;
+            picked => { root.win-close(); }
+        }
+    }
+
+    // 页名：绝对定位横跨整栏 → 相对窗口真居中；无 TouchArea，拖动/双击事件穿透到下层拖拽区
+    Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.page-label;
+        color: Theme.p.textPrimary;
+        font-size: 12px;
+        font-weight: 700;
+    }
+}

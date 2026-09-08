@@ -1,0 +1,316 @@
+// AI 助手设定页（设置域）：左列表卡 + 右详情卡（头像/提示词/温度/开场白/默认模型）
+// + 默认模型选择弹层。数据以 Rust 侧 persona 为真相源，表单逐键自动保存；
+// 删除在竖栏行内两步确认。装配与页切换见 app.slint 设置块。
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Card, Metrics } from "../theme.slint";
+import {
+    Avatar,
+    FieldRow,
+    Pill,
+    PromptRow,
+    MenuOpt,
+    RailItem,
+    RailRow,
+    Modal,
+} from "../common/controls.slint";
+import { ModelItem } from "../chat/input.slint";
+
+export component AstPage inherits Rectangle {
+    // 宿主窗口宽（侧栏宽度公式用；不可引用自身 root.width——本页宽由布局给，成环）
+    in property <length> win-width;
+    // —— 多助手 CRUD（Rust 注入/回注） ——
+    in property <[RailItem]> asts;
+    in-out property <string> ast-sel;       // 正在编辑的助手 id（空 = 无选中）
+    in-out property <string> ast-name;
+    in-out property <string> ast-prompt;    // 系统提示词（空 = 不注入）
+    in-out property <string> ast-temp;      // 温度（空 = 未设定）
+    in-out property <string> ast-opening;   // 开场白（空 = 建会话不插）
+    in-out property <string> ast-model;     // 默认模型 id（空 = 建会话不切模型）
+    in property <string> ast-avatar;        // 头像图片路径（空 = 圆底首字）
+    in property <image> ast-avatar-img;     // 已加载头像（空图 width=0）
+    in property <color> ast-avatar-color;   // 圆底色（Rust 按 id 哈希取色板）
+    in property <string> ast-initial;       // 名称首字（Slint string 无 substring，Rust 注入）
+    in property <bool> sel-ast-default;     // 当前选中 = 默认助手（不可删）
+    in property <bool> sel-ast-deleted;
+    in property <string> ast-status;
+    in property <[ModelItem]> ast-models;   // 默认模型弹层数据源（当前激活提供商模型）
+    callback ast-created();
+    callback ast-selected(string);
+    callback ast-autosave();                  // 表单任一改动逐键落库（不回注入）
+    callback ast-restored();                  // 恢复（仅历史软删条目）
+    callback ast-purged(string);              // 竖栏两步确认/底栏彻底删除（带 id，物理删不可逆）
+    callback ast-defaulted(string);           // 设默认（带 id：竖栏行钮/底栏按钮，点谁设谁）
+    callback ast-avatar-picked();           // 弹系统文件对话框选图
+    callback ast-avatar-cleared();
+
+    property <bool> ast-model-open: false;  // 默认模型选择弹层
+    property <string> del-armed: "";        // 竖栏处于「确认删除」态的条目 id（空 = 无）
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        Card {
+            width: Metrics.rail-width(root.win-width);
+            VerticalLayout {
+                padding: 8px;
+                spacing: 4px;
+                Pill {
+                    label: "＋ 新增";
+                    picked => { root.ast-created(); }
+                }
+
+                for a in root.asts: RailRow {
+                    item: a;
+                    current: a.id == root.ast-sel;
+                    // 「默认」钮只给非默认的行（点谁设谁为默认助手）
+                    action-label: !a.deleted && !a.active ? "默认" : "";
+                    can-delete: !a.deleted && !a.active; // 默认助手不可删（同底栏旧规则）
+                    delete-armed: root.del-armed == a.id;
+                    clicked => {
+                        root.ast-selected(a.id);
+                        root.ast-model-open = false;
+                        root.del-armed = "";
+                    }
+                    action-picked => { root.ast-defaulted(a.id); }
+                    delete-picked => {
+                        if root.del-armed == a.id {
+                            root.del-armed = "";
+                            root.ast-purged(a.id);
+                        } else {
+                            root.del-armed = a.id;
+                        }
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+            }
+        }
+
+        Card {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    viewport-width: self.visible-width;
+                    horizontal-scrollbar-policy: always-off;
+                    vertical-scrollbar-policy: always-on;
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            text: root.ast-sel == "" ? "AI 助手"
+                                : (root.sel-ast-deleted ? "已删除的助手" : "编辑助手");
+                            color: Theme.p.textPrimary;
+                            font-size: 14px;
+                        }
+
+                        if root.ast-sel == "": Text {
+                            text: "没有选中的助手：点左上「＋ 新增」创建。";
+                            color: Theme.p.textMuted;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+
+                        // 头像行：圆形预览（有图盖图，无图圆底+首字）+ 选图/清除
+                        if root.ast-sel != "": HorizontalLayout {
+                            spacing: 10px;
+                            height: 52px;
+                            Avatar {
+                                width: 48px;
+                                height: 48px;
+                                glyph-size: 20px;
+                                img: root.ast-avatar-img;
+                                tint: root.ast-avatar-color;
+                                initial: root.ast-initial;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                vertical-stretch: 0;
+                                spacing: 4px;
+                                Text {
+                                    text: "头像（无图 = 圆底 + 名称首字）";
+                                    color: Theme.p.textMuted;
+                                    font-size: 12px;
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    height: 26px;
+                                    Pill {
+                                        width: 76px;
+                                        label: "选图片…";
+                                        picked => { root.ast-avatar-picked(); }
+                                    }
+
+                                    if root.ast-avatar != "": Pill {
+                                        width: 48px;
+                                        label: "清除";
+                                        picked => { root.ast-avatar-cleared(); }
+                                    }
+                                    if root.ast-avatar != "": Text {
+                                        horizontal-stretch: 1;
+                                        text: root.ast-avatar;
+                                        color: Theme.p.textMuted;
+                                        font-size: 11px;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                    if root.ast-avatar == "": Rectangle {
+                                        horizontal-stretch: 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        if root.ast-sel != "": FieldRow {
+                            label: "名称";
+                            text <=> root.ast-name;
+                            hint: "例如：翻译助手";
+                            edited(t) => { root.ast-name = t; root.ast-autosave(); }
+                        }
+                        if root.ast-sel != "": PromptRow {
+                            label: "系统提示词（每次发送前置注入，留空 = 不发）";
+                            text <=> root.ast-prompt;
+                            hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
+                            edited(t) => { root.ast-prompt = t; root.ast-autosave(); }
+                        }
+                        if root.ast-sel != "": FieldRow {
+                            label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
+                            text <=> root.ast-temp;
+                            hint: "0.7";
+                            edited(t) => { root.ast-temp = t; root.ast-autosave(); }
+                        }
+                        if root.ast-sel != "": PromptRow {
+                            label: "开场白（用该助手新建会话时作为第一条助手消息，留空 = 不插）";
+                            text <=> root.ast-opening;
+                            hint: "例如：你好，我是你的翻译助手，发文本即译";
+                            edited(t) => { root.ast-opening = t; root.ast-autosave(); }
+                        }
+                        if root.ast-sel != "": VerticalLayout {
+                            vertical-stretch: 0;
+                            spacing: 3px;
+                            Text {
+                                text: "默认模型（新建会话时自动切模型下拉；不指定 = 保持当前选择）";
+                                color: Theme.p.textMuted;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                height: 30px;
+                                Pill {
+                                    width: 180px;
+                                    label: root.ast-model == "" ? "不指定" : root.ast-model;
+                                    picked => { root.ast-model-open = true; }
+                                }
+
+                                if root.ast-status != "": Text {
+                                    horizontal-stretch: 1;
+                                    text: root.ast-status;
+                                    color: Theme.p.link;
+                                    font-size: 12px;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+                                if root.ast-status == "": Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+                            }
+                        }
+                        // 尾部惰性 filler：定高内容上靠，高窗富余不被摊开
+                        Rectangle {
+                            vertical-stretch: 1;
+                        }
+                    }
+                }
+
+                // 底栏（不随主体滚动）：仅本条目动作。
+                // 「删除」已移竖栏行内两步确认；表单逐键自动保存，无「完成」
+                if root.ast-sel != "": HorizontalLayout {
+                    spacing: 8px;
+                    height: 30px;
+                    if root.sel-ast-deleted: Pill {
+                        width: 72px;
+                        label: "彻底删除";
+                        picked => { root.ast-purged(root.ast-sel); }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    if root.sel-ast-deleted: Pill {
+                        width: 72px;
+                        label: "恢复";
+                        picked => { root.ast-restored(); }
+                    }
+                    if !root.sel-ast-deleted && !root.sel-ast-default: Pill {
+                        width: 96px;
+                        label: "设为默认";
+                        picked => { root.ast-defaulted(root.ast-sel); }
+                    }
+                }
+            }
+        }
+    }
+
+    // —— 默认模型选择弹层：居中于本页区（数据源 = 当前激活提供商模型清单，含「不指定」） ——
+    if root.ast-model-open: Modal {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        title: "默认模型";
+        card-max-width: 320px;
+        card-max-height: 360px;
+        close-requested => { root.ast-model-open = false; }
+
+        if root.ast-models.length == 0: Text {
+            text: "当前提供商还没有登记模型：先去提供商页添加。";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: Theme.p.windowBg;
+            clip: true;
+            ScrollView {
+                width: parent.width;
+                height: parent.height;
+                viewport-width: self.visible-width;
+                vertical-scrollbar-policy: always-on;
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+                    MenuOpt {
+                        label: "不指定";
+                        picked => {
+                            root.ast-model = "";
+                            root.ast-model-open = false;
+                            root.ast-autosave();
+                        }
+                    }
+
+                    for m in root.ast-models: MenuOpt {
+                        label: m.display;
+                        picked => {
+                            root.ast-model = m.id;
+                            root.ast-model-open = false;
+                            root.ast-autosave();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

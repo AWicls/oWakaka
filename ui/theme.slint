@@ -51,17 +51,43 @@ export global Theme {
     out property <ThemePalette> p: Theme.dark ? Theme.dark-p : Theme.light-p;
 }
 
-/// 通用图标（SVG path，viewBox 16×16）：0 太阳 | 1 月亮 | 2 显示器 | 3 对勾 | 4 下拉箭头
-/// | 5 设置滑杆 | 6 返回左箭头 | 7 回收站 | 8 最小化 | 9 最大化 | 10 还原 | 11 叉号（关闭/删除）。
+/// 图标种类（全仓唯一出处，禁止再用品位魔数选图标）。
+/// `none` = 不画任何图标（OptionRow 无左图标场景的默认值）。
+export enum IconKind {
+    none,        // 无图标
+    sun,         // 太阳（浅色主题）
+    moon,        // 月亮（深色主题）
+    monitor,     // 显示器（跟随系统）
+    check,       // 对勾（选中态）
+    chevron,     // 下拉箭头
+    sliders,     // 设置滑杆
+    arrow-left,  // 返回左箭头
+    trash,       // 回收站
+    minimize,    // 最小化横条
+    maximize,    // 最大化方框
+    restore,     // 还原双框
+    cross,       // 叉号（关闭/删除）
+}
+
+/// 布局度量：跨界面统一的尺寸常数入口（新增尺寸一律加在这里，勿在使用点另写公式）。
+export global Metrics {
+    /// 设置域左竖栏宽（导航卡 / 提供商与助手列表卡通用）：
+    /// 聊天侧栏（可拖拽）默认 190px 与此同量级，三界面左栏观感一致。
+    public pure function rail-width(win: length) -> length {
+        Math.max(150px, Math.min(210px, win * 0.18))
+    }
+}
+
+/// 通用图标（SVG path，viewBox 16×16），种类由 [`IconKind`] 枚举选定。
 /// 全部描边式（对勾/太阳/显示器/叉号），月亮/旋钮为填充；单色随 ink 参数主题化。
-/// 各图标用 `if which == N` 条件实例化（非 visible 门控）：未选中的图标不进渲染树。
+/// 各图标用 `if kind == X` 条件实例化（非 visible 门控）：未选中的图标不进渲染树。
 export component Icon inherits Rectangle {
-    in property <int> which;
+    in property <IconKind> kind: IconKind.none;
     in property <brush> ink; // 命名避开 Rectangle.color(=background) 内置别名
     in property <brush> fill2: transparent; // 仅「还原」图标前框填充（遮重叠线），传按钮底色
 
     // 太阳：圆环 + 8 束光线（描边）
-    if root.which == 0 : Path {
+    if root.kind == IconKind.sun : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -75,7 +101,7 @@ export component Icon inherits Rectangle {
         commands: "M10.6,8 A2.6,2.6 0 1,1 5.4,8 A2.6,2.6 0 1,1 10.6,8 M8,2 V3.8 M8,12.2 V14 M2,8 H3.8 M12.2,8 H14 M3.6,3.6 L5,5 M11,11 L12.4,12.4 M12.4,3.6 L11,5 M5,11 L3.6,12.4";
     }
     // 月亮：月牙（填充）
-    if root.which == 1 : Path {
+    if root.kind == IconKind.moon : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -87,7 +113,7 @@ export component Icon inherits Rectangle {
         commands: "M9.6,2.2 A6.5,6.5 0 1,0 13.8,9 A5.2,5.2 0 1,1 9.6,2.2 Z";
     }
     // 显示器：屏幕 + 底座（描边）
-    if root.which == 2 : Path {
+    if root.kind == IconKind.monitor : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -101,7 +127,7 @@ export component Icon inherits Rectangle {
         commands: "M2.2,3.4 H13.8 V10.6 H2.2 Z M6.4,13.6 H9.6 M8,10.6 V13.6";
     }
     // 对勾（描边）
-    if root.which == 3 : Path {
+    if root.kind == IconKind.check : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -116,7 +142,7 @@ export component Icon inherits Rectangle {
         commands: "M3,8.6 L6.4,12 L13,4.6";
     }
     // 下拉箭头（描边 V 形）
-    if root.which == 4 : Path {
+    if root.kind == IconKind.chevron : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -131,7 +157,7 @@ export component Icon inherits Rectangle {
         commands: "M4,6.2 L8,10 L12,6.2";
     }
     // 设置（滑杆：三条线 + 错位旋钮）
-    if root.which == 5 : Path {
+    if root.kind == IconKind.sliders : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -144,7 +170,7 @@ export component Icon inherits Rectangle {
         fill: transparent;
         commands: "M2.5,4.5 H13.5 M2.5,8 H13.5 M2.5,11.5 H13.5";
     }
-    if root.which == 5 : Path {
+    if root.kind == IconKind.sliders : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -156,7 +182,7 @@ export component Icon inherits Rectangle {
         commands: "M6.6,4.5 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0 M10.1,8 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0 M5.4,11.5 m-1.7,0 a1.7,1.7 0 1,0 3.4,0 a1.7,1.7 0 1,0 -3.4,0";
     }
     // 左箭头（返回）：V 头 + 横线（描边）
-    if root.which == 6 : Path {
+    if root.kind == IconKind.arrow-left : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -171,7 +197,7 @@ export component Icon inherits Rectangle {
         commands: "M9.5,3.5 L5,8 L9.5,12.5 M5,8 H13.5";
     }
     // 回收站（垃圾桶：盖线 + 提手 + 收腰桶身 + 内竖纹，描边）
-    if root.which == 7 : Path {
+    if root.kind == IconKind.trash : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -186,7 +212,7 @@ export component Icon inherits Rectangle {
         commands: "M2.5,4.2 H13.5 M6.4,4.2 V2.6 H9.6 V4.2 M4.1,4.2 L4.9,13.4 H11.1 L11.9,4.2 M6.7,6.6 V11 M9.3,6.6 V11";
     }
     // 最小化：横条
-    if root.which == 8 : Path {
+    if root.kind == IconKind.minimize : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -199,7 +225,7 @@ export component Icon inherits Rectangle {
         commands: "M3,8 H13";
     }
     // 最大化：方框
-    if root.which == 9 : Path {
+    if root.kind == IconKind.maximize : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -212,7 +238,7 @@ export component Icon inherits Rectangle {
         commands: "M3,3 H13 V13 H3 Z";
     }
     // 还原：后框描边 + 前框实底（fill2 遮重叠线）
-    if root.which == 10 : Path {
+    if root.kind == IconKind.restore : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -224,7 +250,7 @@ export component Icon inherits Rectangle {
         fill: transparent;
         commands: "M2,2 H10 V10 H2 Z";
     }
-    if root.which == 10 : Path {
+    if root.kind == IconKind.restore : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -237,7 +263,7 @@ export component Icon inherits Rectangle {
         commands: "M6,6 H14 V14 H6 Z";
     }
     // 叉号（关闭 / 删除）：斜交叉
-    if root.which == 11 : Path {
+    if root.kind == IconKind.cross : Path {
         width: parent.width;
         height: parent.height;
         viewbox-x: 0;
@@ -267,7 +293,7 @@ export component Card inherits Rectangle {
 /// 会话栏主题菜单（带左图标、row-height 34）与输入区模型下拉（无图标、默认 30）共用；
 /// 左图标与对勾均 `if` 条件实例化，未用时不进渲染树。
 export component OptionRow inherits Rectangle {
-    in property <int> icon: -1; // -1 = 无左图标
+    in property <IconKind> icon: IconKind.none; // none = 无左图标
     in property <string> label;
     in property <bool> selected;
     in property <length> row-height: 30px;
@@ -287,16 +313,16 @@ export component OptionRow inherits Rectangle {
         height: parent.height - 4px;
         border-radius: 7px;
         background: ta.has-hover ? Theme.p.listHover : transparent;
-        if root.icon >= 0 : Icon {
+        if root.icon != IconKind.none : Icon {
             x: 9px;
             y: (parent.height - self.height) / 2;
             width: 16px;
             height: 16px;
-            which: root.icon;
+            kind: root.icon;
             ink: root.selected ? Theme.p.link : Theme.p.textSecondary;
         }
         Text {
-            x: root.icon >= 0 ? 33px : 10px;
+            x: root.icon != IconKind.none ? 33px : 10px;
             y: (parent.height - self.height) / 2;
             width: parent.width - 44px;
             text: root.label;
@@ -309,7 +335,7 @@ export component OptionRow inherits Rectangle {
             height: 14px;
             x: parent.width - self.width - 10px;
             y: (parent.height - self.height) / 2;
-            which: 3; // 对勾
+            kind: IconKind.check;
             ink: Theme.p.link;
         }
     }
