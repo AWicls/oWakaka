@@ -28,12 +28,9 @@ fn api_to_i(api: Api) -> i32 {
     }
 }
 
-/// 重注入提供商列表与详情。select 为空 = 维持当前选中；选中失效回落 active。
-/// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
-pub(in crate::ui) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
-    let ps = Providers::load(db).unwrap_or_default();
-    let rows: Vec<RailItem> = ps
-        .list
+/// 竖栏行数据（提供商列表卡的唯一构造点，整包注入与局部刷新共用）。
+fn prov_rail_rows(ps: &Providers) -> Vec<RailItem> {
+    ps.list
         .iter()
         .map(|e| RailItem {
             id: e.id.as_str().into(),
@@ -43,8 +40,20 @@ pub(in crate::ui) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
             activeText: "● 使用中".into(),
             deleted: e.deleted,
         })
-        .collect();
-    window.set_provs(Rc::new(VecModel::from(rows)).into());
+        .collect()
+}
+
+/// 只刷竖栏列表卡（增删改行后不动表单，保住正在输入的焦点）。
+pub(super) fn prov_list_refresh(db: &Db, window: &AppWindow) {
+    let ps = Providers::load(db).unwrap_or_default();
+    window.set_provs(Rc::new(VecModel::from(prov_rail_rows(&ps))).into());
+}
+
+/// 重注入提供商列表与详情。select 为空 = 维持当前选中；选中失效回落 active。
+/// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
+pub(in crate::ui) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
+    let ps = Providers::load(db).unwrap_or_default();
+    window.set_provs(Rc::new(VecModel::from(prov_rail_rows(&ps))).into());
     window.set_remote_models(slint::ModelRc::default()); // 远端清单不跨提供商缓存（端点已变）
     let mut sel = select.to_string();
     if sel.is_empty() {
@@ -202,20 +211,24 @@ pub(super) fn model_upsert(
     }
 }
 
-/// 「完成」：表单写回对应条目（kind/锁定族不信任 UI 传入）；密钥框非空才更新 `[keys]`。
-pub(super) fn prov_save(db: &Db, window: &AppWindow) -> SharedString {
+/// 自动保存：把表单当前值逐键落库到对应条目（kind/锁定族不信任 UI 传入）；
+/// 密钥框非空才更新 `[keys]`。不回注入（防打字失焦/密钥框被清空），只刷竖栏列表；
+/// 无条目/已删/custom 地址还没敲出来 → 静默跳过（半截态不值得入库报错）。
+pub(super) fn prov_autosave(db: &Db, window: &AppWindow) {
     let id = window.get_prov_sel().to_string();
-    let ps = match Providers::load(db) {
-        Ok(ps) => ps,
-        Err(e) => return format!("读取失败: {e}").into(),
+    if id.is_empty() {
+        return;
+    }
+    let Ok(ps) = Providers::load(db) else {
+        return;
     };
-    let Some(cur) = ps.find(&id).cloned() else {
-        return "条目不存在，请从列表重新选择".into();
+    let Some(cur) = ps.find(&id) else {
+        return;
     };
     if cur.deleted {
-        return "已删除条目：恢复后才能编辑".into();
+        return;
     }
-    let mut e = cur;
+    let mut e = cur.clone();
     e.name = window.get_prov_name().trim().to_string();
     if e.name.is_empty() {
         e.name = e.kind.display_name().to_string();
@@ -227,22 +240,20 @@ pub(super) fn prov_save(db: &Db, window: &AppWindow) -> SharedString {
         None => Some(api_of(window.get_prov_api())),
     };
     if e.kind == Provider::Custom && join_url(&e.base_url, &e.url_suffix).is_empty() {
-        return "自定义提供商必须填基础地址".into();
+        return;
     }
     // models 不在表单保存里动（Step B：行级 upsert/remove 即时落盘）
-    if let Err(err) = Providers::save_entry(db, &e) {
-        return format!("保存失败: {err}").into();
+    if Providers::save_entry(db, &e).is_err() {
+        return;
     }
     let key = window.get_prov_key().trim().to_string();
     if !key.is_empty() {
         let mut secrets: Secrets = load_toml("config.toml").unwrap_or_default();
         secrets.keys.insert(id.clone(), key);
-        if let Err(err) = store_toml(&secrets, "config.toml") {
-            return format!("设置已存，密钥写入失败: {err}").into();
-        }
+        let _ = store_toml(&secrets, "config.toml");
     }
-    prov_inject(db, window, &id);
-    "完成，已保存".into()
+    prov_list_refresh(db, window);
+    window.set_prov_status("已自动保存".into());
 }
 
 /// 用表单当前值（未保存也可测）组装临时视图；缺参则写 prov-status 回 `None`。
@@ -342,7 +353,7 @@ pub(in crate::ui) fn wire_prov(window: &AppWindow, ctx: &crate::ui::Ctx) {
             }
         }
     });
-    window.on_prov_saved({
+    window.on_prov_autosave({
         let window_weak = window.as_weak();
         let cache = cache.clone();
         let db = db.clone();
@@ -350,27 +361,30 @@ pub(in crate::ui) fn wire_prov(window: &AppWindow, ctx: &crate::ui::Ctx) {
             let Some(w) = window_weak.upgrade() else {
                 return;
             };
-            let status = prov_save(&db, &w);
+            prov_autosave(&db, &w);
             *cache.lock().unwrap() = None; // 编辑可能改了使用中的条目，重建客户端
-            w.set_prov_status(status);
         }
     });
     window.on_prov_deleted({
         let window_weak = window.as_weak();
         let cache = cache.clone();
         let db = db.clone();
-        move || {
+        move |id| {
             let Some(w) = window_weak.upgrade() else {
                 return;
             };
-            let id = w.get_prov_sel().to_string();
+            let id = id.to_string();
             if id.is_empty() {
                 return;
             }
             match Providers::soft_delete(&db, &id) {
                 Ok(()) => {
                     *cache.lock().unwrap() = None;
-                    prov_inject(&db, &w, &id); // 留在原条目看"已删除"态
+                    if w.get_prov_sel() == id.as_str() {
+                        prov_inject(&db, &w, &id); // 留在原条目看"已删除"态
+                    } else {
+                        prov_list_refresh(&db, &w); // 删的是非选中行：只刷列表，不劫持编辑目标
+                    }
                 }
                 Err(e) => w.set_prov_status(format!("删除失败: {e}").into()),
             }

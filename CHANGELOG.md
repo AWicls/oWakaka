@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Changed
+- LLM 提供商与 AI 助手页改**竖栏行内两步删除 + 逐键自动保存**：「删除」从详情卡固定底栏移入左竖栏每行（`RailRow` 新增可选删除钮；已删行、默认助手行不显），首次点击变强调色「确认删除」、再击软删，点行切换即撤销确认态；回调改带 id，可删任意行——删非选中行只刷列表，不劫持当前编辑目标。底栏撤「删除」「完成」，仅留本条目动作（使用此提供商／恢复／彻底删除／设为默认）。表单任一改动**即落库且不回注入**（防打字失焦、密钥框被清空），只局部刷竖栏列表行；半截无效态静默跳过（custom 地址空、名称空、已删条目），温度暂不可解析仅回显提示不落盘。头像选图/清除即时直写 DB 单字段；`FieldRow`/`PromptRow` 新增 `edited` 透传回调（Rust 注入不触发）
 - 用户设定页改**自动保存**：撤除宿主底栏「保存」按钮，人设编辑框每次变化即落库（persona user 活跃行），状态行回显「已自动保存，下一次发送生效」。防误写：进页首求值与基准同源相等不触发，仅真实编辑触发；逐键直写 SQLite 单行 upsert，未加防抖（量级不需要）
 - 设置域左竖栏宽度统一：新增 `theme.slint` `Metrics.rail-width()` 布局度量（`public pure function`），导航卡与提供商/助手列表卡三处原各自 `Math.max/min` 公式（104–150 / 120–180）收敛为同一来源（150–210，随窗宽 18%），与聊天侧栏默认 190px 同量级
 - UI 逻辑层按三个界面域分级归位（内部重构，行为等价；`fmt`/`clippy`/`test` 全绿）：`src/ui/` 根下平铺的 7 个模块 → `frame.rs`（边框）+ `chat.rs` + `chat/{host,session,bubbles,models}.rs`（聊天）+ `settings.rs` + `settings/{prov,ast}.rs`（设置）。原 563 行 `host.rs` 拆分：多会话簿记留 `chat/host.rs`，会话栏/回收站接线迁 `chat/session.rs`；原 340 行 `settings.rs` 拆分：装配 + 头像小工具留本体，AI 助手页三函数 + 接线迁 `settings/ast.rs`；`prov.rs` 迁入 `settings/`。跨 `chat` 边界的可见性标注由 `pub(super)` 还原为 `pub(in crate::ui)`（等价迁移前语义）

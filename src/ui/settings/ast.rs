@@ -1,5 +1,5 @@
 //! AI 助手设定页装配：助手列表/详情回注（DB persona 为真相源）、
-//! 「完成」写回与页内全部回调接线。头像小工具（色板/首字/加载）在父模块 `settings`。
+//! 表单逐键自动保存与页内全部回调接线。头像小工具（色板/首字/加载）在父模块 `settings`。
 
 use std::rc::Rc;
 
@@ -23,11 +23,9 @@ fn parse_temperature(s: &str) -> Result<Option<f64>, String> {
     Ok(Some(v))
 }
 
-/// 重注入助手列表与详情。select 为空 = 维持当前选中；选中失效回落默认助手。
-pub(super) fn ast_inject(db: &Db, window: &AppWindow, select: &str) {
-    let list = db.assistants().unwrap_or_default();
-    let rows: Vec<RailItem> = list
-        .iter()
+/// 竖栏行数据（助手列表卡的唯一构造点，整包注入与局部刷新共用）。
+fn ast_rail_rows(list: &[crate::db::Assistant]) -> Vec<RailItem> {
+    list.iter()
         .map(|a| RailItem {
             id: a.id.to_string().into(),
             name: a.name.as_str().into(),
@@ -41,8 +39,19 @@ pub(super) fn ast_inject(db: &Db, window: &AppWindow, select: &str) {
             activeText: "● 默认".into(),
             deleted: a.deleted,
         })
-        .collect();
-    window.set_asts(Rc::new(VecModel::from(rows)).into());
+        .collect()
+}
+
+/// 只刷竖栏列表卡（自动保存后同步行名/摘要，不动表单保住输入焦点）。
+fn ast_list_refresh(db: &Db, window: &AppWindow) {
+    let list = db.assistants().unwrap_or_default();
+    window.set_asts(Rc::new(VecModel::from(ast_rail_rows(&list))).into());
+}
+
+/// 重注入助手列表与详情。select 为空 = 维持当前选中；选中失效回落默认助手。
+pub(super) fn ast_inject(db: &Db, window: &AppWindow, select: &str) {
+    let list = db.assistants().unwrap_or_default();
+    window.set_asts(Rc::new(VecModel::from(ast_rail_rows(&list))).into());
     let sel = if select.is_empty() {
         window.get_ast_sel().to_string()
     } else {
@@ -86,37 +95,51 @@ pub(super) fn ast_inject(db: &Db, window: &AppWindow, select: &str) {
     window.set_sel_ast_deleted(a.deleted);
 }
 
-/// 「完成」：表单写回选中助手（id/默认标记/删除态不信任 UI 传入）；
-/// 名称空/温度非法直接回文案不落盘。
-fn ast_save(db: &Db, window: &AppWindow) -> SharedString {
+/// 自动保存：表单当前值逐键落库到选中助手（id/默认标记/删除态不信任 UI 传入）。
+/// 不回注入（保住输入焦点），只刷竖栏列表；无选中/已删/名称清空中 → 静默跳过；
+/// 温度暂不可解析（如敲到一半的 "0."）→ 仅回显提示，不落盘。
+fn ast_autosave(db: &Db, window: &AppWindow) {
     let Ok(id) = window.get_ast_sel().parse::<i64>() else {
-        return "助手未选中".into();
+        return;
     };
     let Some(mut a) = db.assistant(id).ok().flatten() else {
-        return "助手不存在，请从列表重新选择".into();
+        return;
     };
     if a.deleted {
-        return "已删除助手：恢复后才能编辑".into();
+        return;
     }
-    a.name = window.get_ast_name().trim().to_string();
-    if a.name.is_empty() {
-        return "名称不能为空".into();
+    let name = window.get_ast_name().trim().to_string();
+    if name.is_empty() {
+        return; // 清空重打途中：不算非法，先不落盘
     }
+    let Ok(temp) = parse_temperature(&window.get_ast_temp()) else {
+        window.set_ast_status("温度需为数字（0–2）".into());
+        return;
+    };
+    a.name = name;
     a.system_prompt = window.get_ast_prompt().trim().to_string();
-    match parse_temperature(&window.get_ast_temp()) {
-        Ok(v) => a.temperature = v,
-        Err(msg) => return msg.into(),
-    }
+    a.temperature = temp;
     a.opening = window.get_ast_opening().trim().to_string();
     a.model = window.get_ast_model().trim().to_string();
-    // 头像路径：选图/清除时已即时校验可加载（on_ast_avatar_picked），此处照落盘
+    // 头像路径：选图/清除时已即时校验可加载并直接落库（ast_set_avatar），此处照存
     a.avatar = window.get_ast_avatar().trim().to_string();
-    match db.save_assistant(&a) {
-        Ok(()) => {
-            ast_inject(db, window, &id.to_string());
-            "完成，已保存".into()
-        }
-        Err(e) => format!("保存失败: {e}").into(),
+    if db.save_assistant(&a).is_err() {
+        return;
+    }
+    ast_list_refresh(db, window);
+    window.set_ast_status("已自动保存".into());
+}
+
+/// 头像即时落库：只改 avatar 字段，不经表单校验（避免温度等半截态挡住存图）。
+fn ast_set_avatar(db: &Db, window: &AppWindow, path: &str) {
+    let Ok(id) = window.get_ast_sel().parse::<i64>() else {
+        return;
+    };
+    if let Ok(Some(mut a)) = db.assistant(id)
+        && !a.deleted
+    {
+        a.avatar = path.to_string();
+        let _ = db.save_assistant(&a);
     }
 }
 
@@ -131,7 +154,7 @@ pub(super) fn wire_assist(window: &AppWindow, ctx: &Ctx) {
         match db.insert_assistant("新助手") {
             Ok(id) => {
                 ast_inject(&db, &w, &id.to_string());
-                w.set_ast_status("已创建，编辑后点「完成」保存".into());
+                w.set_ast_status("已创建，编辑内容自动保存".into());
             }
             Err(e) => w.set_ast_status(format!("新增失败: {e}").into()),
         }
@@ -147,24 +170,29 @@ pub(super) fn wire_assist(window: &AppWindow, ctx: &Ctx) {
     });
     let window_weak = window.as_weak();
     let db = ctx.db.clone();
-    window.on_ast_saved(move || {
+    window.on_ast_autosave(move || {
         let Some(w) = window_weak.upgrade() else {
             return;
         };
-        let status = ast_save(&db, &w);
-        w.set_ast_status(status);
+        ast_autosave(&db, &w);
     });
     let window_weak = window.as_weak();
     let db = ctx.db.clone();
-    window.on_ast_deleted(move || {
+    window.on_ast_deleted(move |id| {
         let Some(w) = window_weak.upgrade() else {
             return;
         };
-        let Ok(id) = w.get_ast_sel().parse::<i64>() else {
+        let Ok(id) = id.parse::<i64>() else {
             return;
         };
         match db.soft_delete_assistant(id) {
-            Ok(()) => ast_inject(&db, &w, &id.to_string()), // 留在原条目看「已删除」态
+            Ok(()) => {
+                if w.get_ast_sel().is_empty() || w.get_ast_sel().parse::<i64>() != Ok(id) {
+                    ast_list_refresh(&db, &w); // 删的是非选中行：只刷列表，不劫持编辑目标
+                } else {
+                    ast_inject(&db, &w, &id.to_string()); // 留在原条目看「已删除」态
+                }
+            }
             Err(e) => w.set_ast_status(format!("删除失败: {e}").into()),
         }
     });
@@ -217,6 +245,7 @@ pub(super) fn wire_assist(window: &AppWindow, ctx: &Ctx) {
         }
     });
     let window_weak = window.as_weak();
+    let db = ctx.db.clone();
     window.on_ast_avatar_picked(move || {
         let Some(w) = window_weak.upgrade() else {
             return;
@@ -231,21 +260,25 @@ pub(super) fn wire_assist(window: &AppWindow, ctx: &Ctx) {
         };
         match slint::Image::load_from_path(&path) {
             Ok(img) => {
+                let path_str = path.to_string_lossy();
                 w.set_ast_avatar_img(img);
-                w.set_ast_avatar(path.to_string_lossy().as_ref().into());
-                w.set_ast_status("头像已载入，点「完成」保存".into());
+                w.set_ast_avatar(path_str.as_ref().into());
+                ast_set_avatar(&db, &w, &path_str);
+                w.set_ast_status("头像已自动保存".into());
             }
             // 默认解码仅 png/jpeg（slint std → image-decoders 实证），其余格式需先转换
             Err(e) => w.set_ast_status(format!("图片加载失败（支持 png/jpg）: {e}").into()),
         }
     });
     let window_weak = window.as_weak();
+    let db = ctx.db.clone();
     window.on_ast_avatar_cleared(move || {
         let Some(w) = window_weak.upgrade() else {
             return;
         };
         w.set_ast_avatar(SharedString::default());
         w.set_ast_avatar_img(slint::Image::default());
-        w.set_ast_status("头像已清除，点「完成」保存".into());
+        ast_set_avatar(&db, &w, "");
+        w.set_ast_status("头像已清除".into());
     });
 }

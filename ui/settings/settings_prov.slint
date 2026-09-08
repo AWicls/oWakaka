@@ -221,8 +221,8 @@ export component ProvPage inherits Rectangle {
     callback prov-created(int);            // 新增菜单选择：0 通用兼容 | 1 小米 MiMo
     callback prov-selected(string);        // 点列表项 → Rust 回注详情
     callback prov-used();                  // 使用此提供商
-    callback prov-saved();                 // 完成（表单写回条目 + 密钥）
-    callback prov-deleted();               // 逻辑删除
+    callback prov-autosave();              // 表单任一改动逐键落库（不回注入）
+    callback prov-deleted(string);         // 竖栏行两步确认软删（带 id，可删非选中项）
     callback prov-restored();              // 恢复
     callback prov-purged();                // 彻底删除（连带清密钥）
     callback prov-tested();                // 测试连通（用表单当前值）
@@ -231,6 +231,7 @@ export component ProvPage inherits Rectangle {
     property <bool> remote-open: false;    // 远端模型清单弹层（拉取按钮开启，遮罩关闭）
     property <bool> custom-open: false;    // 自定义模型输入行（「自定义」按钮开合）
     property <string> mdl-edit: "";        // 正在编辑的模型行 id（同屏仅一行）
+    property <string> del-armed: "";       // 竖栏处于「确认删除」态的条目 id（空 = 无）
 
     HorizontalLayout {
         spacing: 10px;
@@ -248,10 +249,21 @@ export component ProvPage inherits Rectangle {
                 for pr in root.provs: RailRow {
                     item: pr;
                     current: pr.id == root.prov-sel;
+                    can-delete: !pr.deleted;
+                    delete-armed: root.del-armed == pr.id;
                     clicked => {
                         root.prov-selected(pr.id);
                         root.mdl-edit = "";
                         root.custom-open = false;
+                        root.del-armed = "";
+                    }
+                    delete-picked => {
+                        if root.del-armed == pr.id {
+                            root.del-armed = "";
+                            root.prov-deleted(pr.id);
+                        } else {
+                            root.del-armed = pr.id;
+                        }
                     }
                 }
                 Rectangle {
@@ -324,6 +336,7 @@ export component ProvPage inherits Rectangle {
                             label: "显示名（留空 = 用厂商标签）";
                             text <=> root.prov-name;
                             hint: root.sel-kind;
+                            edited(t) => { root.prov-name = t; root.prov-autosave(); }
                         }
                         // 基础地址与路径后缀并排（2:1 分宽）
                         if root.prov-sel != "": HorizontalLayout {
@@ -334,6 +347,7 @@ export component ProvPage inherits Rectangle {
                                 label: "基础地址（custom 必填；定制厂商留空 = 内置端点）";
                                 text <=> root.prov-base;
                                 hint: "https://api.openai.com/v1";
+                                edited(t) => { root.prov-base = t; root.prov-autosave(); }
                             }
 
                             FieldRow {
@@ -341,12 +355,14 @@ export component ProvPage inherits Rectangle {
                                 label: "路径后缀（可选）";
                                 text <=> root.prov-suffix;
                                 hint: "如 proxy/aigw，可留空";
+                                edited(t) => { root.prov-suffix = t; root.prov-autosave(); }
                             }
                         }
                         if root.prov-sel != "": FieldRow {
                             label: "API 密钥（留空 = 保持已存值不变；只存 config.toml，不进 DB）";
                             text <=> root.prov-key;
                             hint: "sk-...";
+                            edited(t) => { root.prov-key = t; root.prov-autosave(); }
                         }
 
                         if root.prov-sel != "": Text {
@@ -361,14 +377,20 @@ export component ProvPage inherits Rectangle {
                                 width: 120px;
                                 label: "chat";
                                 selected: root.prov-api == 0;
-                                picked => { root.prov-api = 0; }
+                                picked => {
+                                    root.prov-api = 0;
+                                    root.prov-autosave();
+                                }
                             }
 
                             Pill {
                                 width: 120px;
                                 label: "responses";
                                 selected: root.prov-api == 1;
-                                picked => { root.prov-api = 1; }
+                                picked => {
+                                    root.prov-api = 1;
+                                    root.prov-autosave();
+                                }
                             }
 
                             Rectangle {
@@ -564,20 +586,15 @@ export component ProvPage inherits Rectangle {
                     }
                 }
 
-                // 按钮行（固定底栏，不随主体滚动）：删除类恒左，动效项右（「完成」最右）
+                // 固定底栏（不随滚动）：仅本条目动作。
+                // 「删除」已移竖栏行内两步确认；表单逐键自动保存，无「完成」
                 if root.prov-sel != "": HorizontalLayout {
                     spacing: 8px;
                     height: 30px;
-                    Pill {
+                    if root.sel-deleted: Pill {
                         width: 72px;
-                        label: root.sel-deleted ? "彻底删除" : "删除";
-                        picked => {
-                            if root.sel-deleted {
-                                root.prov-purged();
-                            } else {
-                                root.prov-deleted();
-                            }
-                        }
+                        label: "彻底删除";
+                        picked => { root.prov-purged(); }
                     }
 
                     Rectangle {
@@ -593,12 +610,6 @@ export component ProvPage inherits Rectangle {
                         width: 72px;
                         label: "恢复";
                         picked => { root.prov-restored(); }
-                    }
-                    if !root.sel-deleted: Pill {
-                        width: 72px;
-                        label: "完成";
-                        primary: true;
-                        picked => { root.prov-saved(); }
                     }
                 }
             }

@@ -81,8 +81,8 @@ export component AppWindow inherits Window {
     callback prov-created(int);
     callback prov-selected(string);
     callback prov-used();
-    callback prov-saved();
-    callback prov-deleted();
+    callback prov-autosave();
+    callback prov-deleted(string);
     callback prov-restored();
     callback prov-purged();
     callback prov-tested();
@@ -103,8 +103,8 @@ export component AppWindow inherits Window {
     in property <string> ast-status;
     callback ast-created();
     callback ast-selected(string);
-    callback ast-saved();
-    callback ast-deleted();
+    callback ast-autosave();
+    callback ast-deleted(string);
     callback ast-restored();
     callback ast-purged();
     callback ast-defaulted();
@@ -349,8 +349,8 @@ export component AppWindow inherits Window {
                 prov-created(k) => { root.prov-created(k); }
                 prov-selected(id) => { root.prov-selected(id); }
                 prov-used => { root.prov-used(); }
-                prov-saved => { root.prov-saved(); }
-                prov-deleted => { root.prov-deleted(); }
+                prov-autosave => { root.prov-autosave(); }
+                prov-deleted(id) => { root.prov-deleted(id); }
                 prov-restored => { root.prov-restored(); }
                 prov-purged => { root.prov-purged(); }
                 prov-tested => { root.prov-tested(); }
@@ -381,8 +381,8 @@ export component AppWindow inherits Window {
                 ast-models: root.models;
                 ast-created => { root.ast-created(); }
                 ast-selected(id) => { root.ast-selected(id); }
-                ast-saved => { root.ast-saved(); }
-                ast-deleted => { root.ast-deleted(); }
+                ast-autosave => { root.ast-autosave(); }
+                ast-deleted(id) => { root.ast-deleted(id); }
                 ast-restored => { root.ast-restored(); }
                 ast-purged => { root.ast-purged(); }
                 ast-defaulted => { root.ast-defaulted(); }

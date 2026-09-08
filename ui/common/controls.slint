@@ -10,6 +10,8 @@ export component FieldRow inherits Rectangle {
     in property <string> label;
     in-out property <string> text;
     in property <string> hint;
+    /// 用户输入透传（自动保存挂点；Rust 侧注入不触发）
+    callback edited(string);
 
     height: 52px;
     VerticalLayout {
@@ -37,6 +39,7 @@ export component FieldRow inherits Rectangle {
                 color: Theme.p.textPrimary;
                 selection-background-color: Theme.p.accentSoftBg;
                 text <=> root.text;
+                edited => { root.edited(ti.text); }
             }
             Text {
                 visible: root.hint != "" && ti.text == "";
@@ -94,6 +97,8 @@ export component PromptRow inherits Rectangle {
     in property <string> label;
     in-out property <string> text;
     in property <string> hint;
+    /// 用户输入透传（自动保存挂点；Rust 侧注入不触发）
+    callback edited(string);
 
     height: 124px;
     VerticalLayout {
@@ -110,7 +115,7 @@ export component PromptRow inherits Rectangle {
             border-width: 1px;
             border-color: Theme.p.inputBorder;
             background: transparent; // 底色由 TextEdit 自绘，套 theme 色会双层
-            TextEdit {
+            te := TextEdit {
                 x: 2px;
                 y: 2px;
                 width: parent.width - 4px;
@@ -119,6 +124,7 @@ export component PromptRow inherits Rectangle {
                 wrap: word-wrap;
                 placeholder-text: root.hint;
                 text <=> root.text;
+                edited => { root.edited(te.text); }
             }
         }
     }
@@ -251,11 +257,16 @@ export struct RailItem {
     deleted: bool,
 }
 
-/// 列表竖栏的一行：主行名称、副行状态；编辑中底色、使用中强调、删除灰显
+/// 列表竖栏的一行：主行名称、副行状态；编辑中底色、使用中强调、删除灰显。
+/// can-delete = 行右侧「删除」钮（两步确认：armed 态变强调色「确认删除」；
+/// 确认态由宿主页按 id 持有，已删行不显钮）。
 export component RailRow inherits Rectangle {
     in property <RailItem> item;
     in property <bool> current;
+    in property <bool> can-delete: false;
+    in property <bool> delete-armed: false;
     callback clicked();
+    callback delete-picked();
 
     height: 46px;
     border-radius: 7px;
@@ -267,21 +278,34 @@ export component RailRow inherits Rectangle {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
-    VerticalLayout {
+    HorizontalLayout {
         padding: 8px;
-        spacing: 1px;
-        Text {
-            text: root.item.name;
-            color: root.item.deleted ? Theme.p.textMuted : Theme.p.textPrimary;
-            font-size: 13px;
-            overflow: elide;
+        spacing: 6px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 1px;
+            Text {
+                text: root.item.name;
+                color: root.item.deleted ? Theme.p.textMuted : Theme.p.textPrimary;
+                font-size: 13px;
+                overflow: elide;
+            }
+            Text {
+                text: root.item.deleted ? "已删除"
+                    : (root.item.active ? root.item.activeText : root.item.sub);
+                color: root.item.active ? Theme.p.link : Theme.p.textMuted;
+                font-size: 11px;
+                overflow: elide;
+            }
         }
-        Text {
-            text: root.item.deleted ? "已删除"
-                : (root.item.active ? root.item.activeText : root.item.sub);
-            color: root.item.active ? Theme.p.link : Theme.p.textMuted;
-            font-size: 11px;
-            overflow: elide;
+        // 后声明盖在上层 TouchArea 上，按钮点击不外泄为行选中
+        if root.can-delete && !root.item.deleted: Pill {
+            width: self.hug-width;
+            btn-height: 24px;
+            label: root.delete-armed ? "确认删除" : "删除";
+            danger: !root.delete-armed;
+            primary: root.delete-armed;
+            picked => { root.delete-picked(); }
         }
     }
 }

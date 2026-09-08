@@ -1,6 +1,6 @@
 // AI 助手设定页（设置域）：左列表卡 + 右详情卡（头像/提示词/温度/开场白/默认模型）
-// + 默认模型选择弹层。数据以 Rust 侧 persona 为真相源，「完成」一次性写回。
-// 装配与页切换见 app.slint 设置块。
+// + 默认模型选择弹层。数据以 Rust 侧 persona 为真相源，表单逐键自动保存；
+// 删除在竖栏行内两步确认。装配与页切换见 app.slint 设置块。
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme, Card, Metrics } from "../theme.slint";
@@ -37,8 +37,8 @@ export component AstPage inherits Rectangle {
     in property <[ModelItem]> ast-models;   // 默认模型弹层数据源（当前激活提供商模型）
     callback ast-created();
     callback ast-selected(string);
-    callback ast-saved();                   // 「完成」：表单写回选中助手
-    callback ast-deleted();
+    callback ast-autosave();                  // 表单任一改动逐键落库（不回注入）
+    callback ast-deleted(string);             // 竖栏行两步确认软删（带 id）
     callback ast-restored();
     callback ast-purged();
     callback ast-defaulted();               // 设为默认助手
@@ -46,6 +46,7 @@ export component AstPage inherits Rectangle {
     callback ast-avatar-cleared();
 
     property <bool> ast-model-open: false;  // 默认模型选择弹层
+    property <string> del-armed: "";        // 竖栏处于「确认删除」态的条目 id（空 = 无）
 
     HorizontalLayout {
         spacing: 10px;
@@ -63,9 +64,20 @@ export component AstPage inherits Rectangle {
                 for a in root.asts: RailRow {
                     item: a;
                     current: a.id == root.ast-sel;
+                    can-delete: !a.deleted && !a.active; // 默认助手不可删（同底栏旧规则）
+                    delete-armed: root.del-armed == a.id;
                     clicked => {
                         root.ast-selected(a.id);
                         root.ast-model-open = false;
+                        root.del-armed = "";
+                    }
+                    delete-picked => {
+                        if root.del-armed == a.id {
+                            root.del-armed = "";
+                            root.ast-deleted(a.id);
+                        } else {
+                            root.del-armed = a.id;
+                        }
                     }
                 }
                 Rectangle {
@@ -158,21 +170,25 @@ export component AstPage inherits Rectangle {
                             label: "名称";
                             text <=> root.ast-name;
                             hint: "例如：翻译助手";
+                            edited(t) => { root.ast-name = t; root.ast-autosave(); }
                         }
                         if root.ast-sel != "": PromptRow {
                             label: "系统提示词（每次发送前置注入，留空 = 不发）";
                             text <=> root.ast-prompt;
                             hint: "例如：你是 oWakaka，回答简洁，中文，代码优先";
+                            edited(t) => { root.ast-prompt = t; root.ast-autosave(); }
                         }
                         if root.ast-sel != "": FieldRow {
                             label: "温度（0–2；留空 = 不发送该字段，跟随网关默认）";
                             text <=> root.ast-temp;
                             hint: "0.7";
+                            edited(t) => { root.ast-temp = t; root.ast-autosave(); }
                         }
                         if root.ast-sel != "": PromptRow {
                             label: "开场白（用该助手新建会话时作为第一条助手消息，留空 = 不插）";
                             text <=> root.ast-opening;
                             hint: "例如：你好，我是你的翻译助手，发文本即译";
+                            edited(t) => { root.ast-opening = t; root.ast-autosave(); }
                         }
                         if root.ast-sel != "": VerticalLayout {
                             vertical-stretch: 0;
@@ -213,7 +229,8 @@ export component AstPage inherits Rectangle {
                     }
                 }
 
-                // 底栏（不随主体滚动）：删除类恒左，「设为默认」「完成」靠右
+                // 底栏（不随主体滚动）：仅本条目动作。
+                // 「删除」已移竖栏行内两步确认；表单逐键自动保存，无「完成」
                 if root.ast-sel != "": HorizontalLayout {
                     spacing: 8px;
                     height: 30px;
@@ -221,11 +238,6 @@ export component AstPage inherits Rectangle {
                         width: 72px;
                         label: "彻底删除";
                         picked => { root.ast-purged(); }
-                    }
-                    if !root.sel-ast-deleted && !root.sel-ast-default: Pill {
-                        width: 72px;
-                        label: "删除";
-                        picked => { root.ast-deleted(); }
                     }
                     Rectangle {
                         horizontal-stretch: 1;
@@ -240,12 +252,6 @@ export component AstPage inherits Rectangle {
                         width: 96px;
                         label: "设为默认";
                         picked => { root.ast-defaulted(); }
-                    }
-                    if !root.sel-ast-deleted: Pill {
-                        width: 72px;
-                        label: "完成";
-                        primary: true;
-                        picked => { root.ast-saved(); }
                     }
                 }
             }
@@ -289,6 +295,7 @@ export component AstPage inherits Rectangle {
                         picked => {
                             root.ast-model = "";
                             root.ast-model-open = false;
+                            root.ast-autosave();
                         }
                     }
 
@@ -297,6 +304,7 @@ export component AstPage inherits Rectangle {
                         picked => {
                             root.ast-model = m.id;
                             root.ast-model-open = false;
+                            root.ast-autosave();
                         }
                     }
                 }
