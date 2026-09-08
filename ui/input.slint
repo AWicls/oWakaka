@@ -1,7 +1,7 @@
 // 输入区卡片：无框自绘编辑器（ScrollView + TextInput）+ 模型切换/Thinking/发送停止按钮行。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icon, OptionRow } from "theme.slint";
+import { Theme, Icon, IconKind, OptionRow } from "theme.slint";
 
 /// 模型切换下拉的一行数据源：模型 ID + 显示名（别名或原 ID）+ 是否当前激活
 export struct ModelItem {
@@ -131,7 +131,7 @@ export component InputArea inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 14px;
                 height: 14px;
-                which: 4;
+                kind: IconKind.chevron;
                 ink: Theme.p.textMuted;
             }
         }

@@ -3,7 +3,7 @@
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
 import { ScrollView, TextEdit } from "std-widgets.slint";
-import { Theme, Icon, Card } from "theme.slint";
+import { Theme, Icon, IconKind, Card } from "theme.slint";
 import { ModelItem } from "input.slint";
 
 /// 标签 + 单行输入框（空值时显示灰色提示）
@@ -240,7 +240,7 @@ component BackButton inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: 14px;
                 height: 14px;
-                which: 6;
+                kind: IconKind.arrow-left;
                 ink: Theme.p.textSecondary;
             }
         }

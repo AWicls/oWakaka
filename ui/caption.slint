@@ -1,19 +1,11 @@
 // 无边框自绘标题栏：拖拽区（按下发起原生拖窗，双击切最大化）+ 右上角三键
 //（Windows 惯例序：最小化/最大化·还原/关闭，关闭贴右角）。图标一律走 theme.slint Icon
 // 图元自绘——Unicode ✕/❐ 在默认字体下缺字成豆腐块「口」且大小不一。
-import { Theme, Icon } from "theme.slint";
-
-/// 标题栏 caption 按钮图标种类
-enum CaptionIcon {
-    minimize,
-    maximize,
-    restore,
-    close,
-}
+import { Theme, Icon, IconKind } from "theme.slint";
 
 /// 标题栏 caption 按钮：约 46px 宽悬停灰底，danger（关闭）悬停红底白图标；图标复用 theme.slint Icon
 component CaptionBtn inherits Rectangle {
-    in property <CaptionIcon> icon;
+    in property <IconKind> icon;
     in property <bool> danger: false;
     callback picked();
 
@@ -29,16 +21,13 @@ component CaptionBtn inherits Rectangle {
         mouse-cursor: pointer;
         clicked => { root.picked(); }
     }
-    // 图标收编至 theme.slint Icon（枚举→which），不再在此各写一套 Path
+    // 图标收编至 theme.slint Icon（IconKind 枚举直通），不再在此各写一套 Path
     Icon {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: 16px;
         height: 16px;
-        // 8 最小化 | 9 最大化 | 10 还原 | 11 叉号（关闭）
-        which: root.icon == CaptionIcon.minimize ? 8
-            : root.icon == CaptionIcon.maximize ? 9
-            : root.icon == CaptionIcon.restore ? 10 : 11;
+        kind: root.icon;
         ink: root.fg;
         fill2: root.btn-bg;
     }
@@ -81,17 +70,17 @@ export component CaptionBar inherits Rectangle {
         }
 
         CaptionBtn {
-            icon: CaptionIcon.minimize;
+            icon: IconKind.minimize;
             picked => { root.win-minimize(); }
         }
 
         CaptionBtn {
-            icon: root.is-maximized ? CaptionIcon.restore : CaptionIcon.maximize;
+            icon: root.is-maximized ? IconKind.restore : IconKind.maximize;
             picked => { root.win-maximize(); }
         }
 
         CaptionBtn {
-            icon: CaptionIcon.close;
+            icon: IconKind.cross;
             danger: true;
             picked => { root.win-close(); }
         }
