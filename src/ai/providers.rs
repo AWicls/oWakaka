@@ -10,8 +10,11 @@
 //! DB 文件可随意备份/导出/传阅。
 //!
 //! # 删除宪法
-//! 条目删除 = 逻辑删（`deleted` 标记，列表灰显可恢复）；「彻底删除」才物理移除
-//! 并连带清 `[keys]` 中该 id 的密钥。
+//! 条目删除 = 两步确认后**物理移除**并连带清 `[keys]` 中该 id 的密钥
+//! （历史遗留的 `deleted` 灰显条目仍可恢复/彻底删除）。
+//! # 启停开关
+//! 条目另有 `enabled`（默认启用）：禁用 = 暂离线——不进聊天模型下拉、不可被路由；
+//! 禁用当前路由项时 active 自动回落到下一个可用条目。
 
 use std::{collections::BTreeMap, error::Error, path::Path};
 
@@ -92,8 +95,15 @@ pub struct ProviderEntry {
     /// 可用模型列表（按 id 升序持久化；兼容 Step A 的 map 旧格式）
     #[serde(default, deserialize_with = "de_models")]
     pub models: Vec<ModelInfo>,
-    /// 逻辑删除标记（删除宪法）
+    /// 逻辑删除标记（删除宪法；仅供历史遗留条目，UI 新删除直接物理 purge）
     pub deleted: bool,
+    /// 启停开关（false = 暂离线：不进聊天下拉、不可路由；旧档案缺字段视为启用）
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ProviderEntry {
@@ -108,6 +118,7 @@ impl Default for ProviderEntry {
             stream: true,
             models: Vec::new(),
             deleted: false,
+            enabled: true,
         }
     }
 }
@@ -157,9 +168,14 @@ impl Providers {
         db.kv_set(KV_KEY, &serde_json::to_string(self)?)
     }
 
-    /// 未删除条目（列表 UI 数据源含灰显项，此迭代器面向"可用"语义）。
+    /// 未删除条目（列表 UI 数据源含灰显/禁用项，此迭代器面向"存在"语义）。
     pub fn live(&self) -> impl Iterator<Item = &ProviderEntry> {
         self.list.iter().filter(|p| !p.deleted)
+    }
+
+    /// 未删且启用的条目（对话侧可用面：模型下拉聚合、active 回落候选）。
+    pub fn usable(&self) -> impl Iterator<Item = &ProviderEntry> {
+        self.list.iter().filter(|p| !p.deleted && p.enabled)
     }
 
     pub fn find(&self, id: &str) -> Option<&ProviderEntry> {
@@ -178,17 +194,31 @@ impl Providers {
         }
     }
 
-    /// 删除/彻底删除后维护 active：若 active 正指向被处理项，切到下一个未删条目（无则清空）。
+    /// 删除/彻底删除后维护 active：若 active 正指向被处理项，切到下一个可用（未删且启用）条目（无则清空）。
     fn reactivate_if_current(&mut self, id: &str) {
         if self.active == id {
-            let next = self.live().next().map(|p| p.id.clone());
+            let next = self.usable().next().map(|p| p.id.clone());
             self.active = next.unwrap_or_default();
         }
     }
 
-    /// 使用中条目（active 指向已删/不存在 = `None`）。
+    /// 启用/禁用条目（已删条目忽略）。禁用正被路由的 active → 自动回落到下一个可用条目。
+    pub fn set_enabled(db: &Db, id: &str, on: bool) -> Result<(), Box<dyn Error>> {
+        let mut ps = Self::load(db)?;
+        let Some(e) = ps.list.iter_mut().find(|p| p.id == id && !p.deleted) else {
+            return Ok(());
+        };
+        e.enabled = on;
+        if !on && ps.active == id {
+            let next = ps.usable().next().map(|p| p.id.clone());
+            ps.active = next.unwrap_or_default();
+        }
+        ps.store(db)
+    }
+
+    /// 使用中条目（active 指向已删/已禁用/不存在 = `None`）。
     pub fn active_entry(&self) -> Option<&ProviderEntry> {
-        self.find(&self.active).filter(|p| !p.deleted)
+        self.find(&self.active).filter(|p| !p.deleted && p.enabled)
     }
 
     /// 组装「使用中提供商」的扁平运行视图（下游 `Client`/模型下拉零感知消费）。
@@ -241,7 +271,8 @@ impl Providers {
         }
     }
 
-    /// 新建条目并持久化，返回其 id（默认不切换使用中；MiMo 预填内置端点便于查看）。
+    /// 新建条目并持久化，返回其 id。首家（active 空）自动激活——「添加了就是能用的」；
+    /// 后续家不抢当前路由（MiMo 预填内置端点便于查看）。
     pub fn create(db: &Db, kind: Provider) -> Result<String, Box<dyn Error>> {
         let mut ps = Self::load(db)?;
         let n: u32 = ps
@@ -260,14 +291,17 @@ impl Providers {
             base_url: kind.default_base_url().unwrap_or("").to_string(),
             ..Default::default()
         });
+        if ps.active.is_empty() {
+            ps.active = id.clone();
+        }
         ps.store(db)?;
         Ok(id)
     }
 
-    /// 「使用此提供商」：active 指针切换（已删条目不可激活）。
+    /// 路由指针切换（下拉选中某提供商模型时隐式调用；已删/已禁用不可激活）。
     pub fn set_active(db: &Db, id: &str) -> Result<(), Box<dyn Error>> {
         let mut ps = Self::load(db)?;
-        if ps.find(id).is_some_and(|p| !p.deleted) {
+        if ps.find(id).is_some_and(|p| !p.deleted && p.enabled) {
             ps.active = id.to_string();
             ps.store(db)?;
         }
@@ -460,6 +494,7 @@ impl Providers {
                 })
                 .collect(),
             deleted: false,
+            enabled: true,
         };
         let mut secrets: Secrets = super::config::load_toml(path).unwrap_or_default();
         if !cfg.api_key.is_empty() {
@@ -491,7 +526,7 @@ mod tests {
         let b = Providers::create(&db, Provider::XiaomiMimo)?;
         assert_eq!((a.as_str(), b.as_str()), ("p1", "p2"));
         let ps = Providers::load(&db)?;
-        assert!(ps.active.is_empty(), "新建不自动激活");
+        assert_eq!(ps.active, a, "首家自动激活（添加了就是能用的）");
 
         Providers::set_active(&db, &b)?;
         let ps = Providers::load(&db)?;
@@ -501,6 +536,17 @@ mod tests {
             "https://api.xiaomimimo.com/v1",
             "MiMo 建条目预填内置端点"
         );
+
+        // 禁用正被路由的 active → 回落到下一个可用；禁用条目不可再激活
+        Providers::set_enabled(&db, &b, false)?;
+        let ps = Providers::load(&db)?;
+        assert_eq!(ps.active, a, "禁用当前路由项自动回落");
+        assert!(!ps.find(&b).unwrap().enabled);
+        Providers::set_active(&db, &b)?;
+        assert_eq!(Providers::load(&db)?.active, a, "禁用条目不可激活");
+        Providers::set_enabled(&db, &b, true)?;
+        Providers::set_active(&db, &b)?;
+        assert_eq!(Providers::load(&db)?.active, b, "重新启用后可激活");
 
         // 删除 active → 自动回落到剩余可用
         Providers::soft_delete(&db, &b)?;

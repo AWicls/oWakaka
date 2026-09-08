@@ -38,6 +38,7 @@ fn ast_rail_rows(list: &[crate::db::Assistant]) -> Vec<RailItem> {
             active: a.is_default,
             activeText: "● 默认".into(),
             deleted: a.deleted,
+            enabled: true, // 启停是提供商专属，助手行恒可用
         })
         .collect()
 }
@@ -213,16 +214,20 @@ pub(super) fn wire_assist(window: &AppWindow, ctx: &Ctx) {
     });
     let window_weak = window.as_weak();
     let db = ctx.db.clone();
-    window.on_ast_defaulted(move || {
+    window.on_ast_defaulted(move |id| {
         let Some(w) = window_weak.upgrade() else {
             return;
         };
-        let Ok(id) = w.get_ast_sel().parse::<i64>() else {
+        let Ok(id) = id.parse::<i64>() else {
             return;
         };
         match db.set_default_assistant(id) {
             Ok(()) => {
-                ast_inject(&db, &w, &id.to_string());
+                if w.get_ast_sel().parse::<i64>() != Ok(id) {
+                    ast_list_refresh(&db, &w); // 设的非选中行：只刷列表（● 默认 标记随行移动）
+                } else {
+                    ast_inject(&db, &w, &id.to_string());
+                }
                 w.set_ast_status("已设为默认，之后新建会话生效".into());
             }
             Err(e) => w.set_ast_status(format!("切换失败: {e}").into()),

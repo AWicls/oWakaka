@@ -204,7 +204,6 @@ export component ProvPage inherits Rectangle {
     in-out property <int> prov-api;         // 0 chat | 1 responses
     in property <string> sel-kind;          // 当前条目厂商显示名
     in property <bool> sel-locked;          // 定制提供商：接口族锁定
-    in property <bool> sel-active;          // 当前条目 = 使用中
     in property <bool> sel-deleted;         // 当前条目已逻辑删除
     in property <string> prov-status;       // 状态行（测试/保存回显）
     // —— 模型管理 ——
@@ -220,8 +219,8 @@ export component ProvPage inherits Rectangle {
     callback prov-model-removed(string);
     callback prov-created(int);            // 新增菜单选择：0 通用兼容 | 1 小米 MiMo
     callback prov-selected(string);        // 点列表项 → Rust 回注详情
-    callback prov-used();                  // 使用此提供商
     callback prov-autosave();              // 表单任一改动逐键落库（不回注入）
+    callback prov-toggled(string);         // 启用/禁用（带 id；禁用当前路由项自动回落）
     callback prov-purged(string);          // 竖栏两步确认/底栏彻底删除（带 id，物理删不可逆）
     callback prov-restored();              // 恢复（仅历史软删条目）
     callback prov-tested();                // 测试连通（用表单当前值）
@@ -248,6 +247,8 @@ export component ProvPage inherits Rectangle {
                 for pr in root.provs: RailRow {
                     item: pr;
                     current: pr.id == root.prov-sel;
+                    // 启停钮：启用中的家显「禁用」，其余显「启用」（已删行不显）
+                    action-label: pr.deleted ? "" : (pr.enabled ? "禁用" : "启用");
                     can-delete: !pr.deleted;
                     delete-armed: root.del-armed == pr.id;
                     clicked => {
@@ -256,6 +257,7 @@ export component ProvPage inherits Rectangle {
                         root.custom-open = false;
                         root.del-armed = "";
                     }
+                    action-picked => { root.prov-toggled(pr.id); }
                     delete-picked => {
                         if root.del-armed == pr.id {
                             root.del-armed = "";
@@ -585,12 +587,12 @@ export component ProvPage inherits Rectangle {
                     }
                 }
 
-                // 固定底栏（不随滚动）：仅本条目动作。
-                // 「删除」已移竖栏行内两步确认；表单逐键自动保存，无「完成」
-                if root.prov-sel != "": HorizontalLayout {
+                // 固定底栏（不随滚动）：仅历史软删条目的善后动作。
+                // 「删除/启停」已移竖栏行内；路由随聊天下拉选模型隐式切换；逐键自动保存
+                if root.prov-sel != "" && root.sel-deleted: HorizontalLayout {
                     spacing: 8px;
                     height: 30px;
-                    if root.sel-deleted: Pill {
+                    Pill {
                         width: 72px;
                         label: "彻底删除";
                         picked => { root.prov-purged(root.prov-sel); }
@@ -600,12 +602,7 @@ export component ProvPage inherits Rectangle {
                         horizontal-stretch: 1;
                     }
 
-                    if !root.sel-deleted && !root.sel-active: Pill {
-                        width: 108px;
-                        label: "使用此提供商";
-                        picked => { root.prov-used(); }
-                    }
-                    if root.sel-deleted: Pill {
+                    Pill {
                         width: 72px;
                         label: "恢复";
                         picked => { root.prov-restored(); }

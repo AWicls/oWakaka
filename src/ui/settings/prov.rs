@@ -35,10 +35,15 @@ fn prov_rail_rows(ps: &Providers) -> Vec<RailItem> {
         .map(|e| RailItem {
             id: e.id.as_str().into(),
             name: e.name.as_str().into(),
-            sub: e.kind.display_name().into(),
+            sub: if e.enabled {
+                e.kind.display_name().into()
+            } else {
+                "已禁用".into()
+            },
             active: e.id == ps.active,
             activeText: "● 使用中".into(),
             deleted: e.deleted,
+            enabled: e.enabled,
         })
         .collect()
 }
@@ -72,7 +77,6 @@ pub(in crate::ui) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
         window.set_prov_api(0);
         window.set_sel_kind("".into());
         window.set_sel_locked(false);
-        window.set_sel_active(false);
         window.set_sel_deleted(false);
         window.set_prov_models(Rc::new(VecModel::<ModelRow>::default()).into());
         return;
@@ -84,7 +88,6 @@ pub(in crate::ui) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
     window.set_prov_api(api_to_i(e.kind.locked_api().or(e.api).unwrap_or_default()));
     window.set_sel_kind(e.kind.display_name().into());
     window.set_sel_locked(e.kind.locked_api().is_some());
-    window.set_sel_active(sel == ps.active);
     window.set_sel_deleted(e.deleted);
     prov_models_refresh(&ps, window);
 }
@@ -334,22 +337,36 @@ pub(in crate::ui) fn wire_prov(window: &AppWindow, ctx: &crate::ui::Ctx) {
             w.set_prov_status(SharedString::default());
         }
     });
-    window.on_prov_used({
+    window.on_prov_toggled({
         let window_weak = window.as_weak();
         let cache = cache.clone();
         let db = db.clone();
-        move || {
+        move |id| {
             let Some(w) = window_weak.upgrade() else {
                 return;
             };
-            let id = w.get_prov_sel().to_string();
-            match Providers::set_active(&db, &id) {
+            let id = id.to_string();
+            let Ok(ps) = Providers::load(&db) else {
+                return;
+            };
+            let Some(on) = ps.find(&id).filter(|e| !e.deleted).map(|e| !e.enabled) else {
+                return;
+            };
+            match Providers::set_enabled(&db, &id, on) {
                 Ok(()) => {
-                    *cache.lock().unwrap() = None; // 下一次发送即用新提供商
-                    prov_inject(&db, &w, &id);
-                    w.set_prov_status("已切换，下一次发送生效".into());
+                    *cache.lock().unwrap() = None; // 禁用当前路由项会触发回落，一律重建客户端
+                    if w.get_prov_sel() == id.as_str() {
+                        prov_inject(&db, &w, &id); // 选中行本身：详情态随之刷新
+                    } else {
+                        prov_list_refresh(&db, &w);
+                    }
+                    w.set_prov_status(if on {
+                        "已启用".into()
+                    } else {
+                        "已禁用".into()
+                    });
                 }
-                Err(e) => w.set_prov_status(format!("切换失败: {e}").into()),
+                Err(e) => w.set_prov_status(format!("启停失败: {e}").into()),
             }
         }
     });

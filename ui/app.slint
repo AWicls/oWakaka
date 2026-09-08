@@ -64,7 +64,6 @@ export component AppWindow inherits Window {
     in-out property <int> prov-api;
     in property <string> sel-kind;
     in property <bool> sel-locked;
-    in property <bool> sel-active;
     in property <bool> sel-deleted;
     in property <string> prov-status;
     // —— Step B：模型管理（当前提供商模型 + 远端拉取清单） ——
@@ -80,8 +79,8 @@ export component AppWindow inherits Window {
     callback prov-model-removed(string);   // 移除模型
     callback prov-created(int);
     callback prov-selected(string);
-    callback prov-used();
     callback prov-autosave();
+    callback prov-toggled(string);
     callback prov-restored();
     callback prov-purged(string);
     callback prov-tested();
@@ -105,7 +104,7 @@ export component AppWindow inherits Window {
     callback ast-autosave();
     callback ast-restored();
     callback ast-purged(string);
-    callback ast-defaulted();
+    callback ast-defaulted(string);
     callback ast-avatar-picked();
     callback ast-avatar-cleared();
     // persona 初值：Rust 打开设置页时从 DB 读取注入
@@ -122,7 +121,7 @@ export component AppWindow inherits Window {
     callback trash-purge(int);
     callback stop(); // 停止当前可见会话的生成
     callback toggle-thinking();
-    callback model-picked(string); // 选择模型（Rust 切换激活 + 回写设置 kv）
+    callback model-picked(string, string); // (提供商 id, 模型 id)：Rust 隐式路由 + 回写设置 kv
     callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
     callback settings-requested(); // 进入设置整页（Rust 读配置注入初值 + settings-page 置 true）
     callback settings-saved(string); // 用户人设自动保存（编辑即存；提供商/助手页卡内保存）
@@ -265,7 +264,7 @@ export component AppWindow inherits Window {
                 send-submit(text) => { root.send(text); }
                 stop-request => { root.stop(); }
                 thinking-toggled => { root.toggle-thinking(); }
-                model-picked(id) => { root.model-picked(id); }
+                model-picked(prov, id) => { root.model-picked(prov, id); }
                 models-requested => { root.models-requested(); }
             }
         }
@@ -331,7 +330,6 @@ export component AppWindow inherits Window {
                 prov-api <=> root.prov-api;
                 sel-kind: root.sel-kind;
                 sel-locked: root.sel-locked;
-                sel-active: root.sel-active;
                 sel-deleted: root.sel-deleted;
                 prov-status: root.prov-status;
                 prov-models: root.prov-models;
@@ -346,7 +344,7 @@ export component AppWindow inherits Window {
                 prov-model-removed(id) => { root.prov-model-removed(id); }
                 prov-created(k) => { root.prov-created(k); }
                 prov-selected(id) => { root.prov-selected(id); }
-                prov-used => { root.prov-used(); }
+                prov-toggled(id) => { root.prov-toggled(id); }
                 prov-autosave => { root.prov-autosave(); }
                 prov-restored => { root.prov-restored(); }
                 prov-purged(id) => { root.prov-purged(id); }
@@ -381,7 +379,7 @@ export component AppWindow inherits Window {
                 ast-autosave => { root.ast-autosave(); }
                 ast-restored => { root.ast-restored(); }
                 ast-purged(id) => { root.ast-purged(id); }
-                ast-defaulted => { root.ast-defaulted(); }
+                ast-defaulted(id) => { root.ast-defaulted(id); }
                 ast-avatar-picked => { root.ast-avatar-picked(); }
                 ast-avatar-cleared => { root.ast-avatar-cleared(); }
             }

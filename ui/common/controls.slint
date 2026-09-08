@@ -247,7 +247,8 @@ export component Avatar inherits Rectangle {
 }
 
 /// 列表竖栏一行数据（提供商 / AI 助手两页共用；字段 Rust 注入）：
-/// `sub` = 副行常态文案（厂商标签 / 默认模型摘要）；`activeText` = 选中态副行（● 使用中 / ● 默认）
+/// `sub` = 副行常态文案（厂商标签 / 默认模型摘要）；`activeText` = 选中态副行（● 使用中 / ● 默认）；
+/// `enabled` = 提供商启停（false 灰显；助手页恒 true）
 export struct RailItem {
     id: string,
     name: string,
@@ -255,17 +256,22 @@ export struct RailItem {
     active: bool,
     activeText: string,
     deleted: bool,
+    enabled: bool,
 }
 
-/// 列表竖栏的一行：主行名称、副行状态；编辑中底色、使用中强调、删除灰显。
-/// can-delete = 行右侧删除钮（两步确认：armed 态变强调色「确认彻底删除」，
-/// 再击直接物理删不可逆；确认态由宿主页按 id 持有，已删行不显钮）。
+/// 列表竖栏的一行：主行名称、副行状态；编辑中底色、使用中强调、删除/禁用灰显。
+/// action-label 非空 = 行右侧通用动作钮（提供商「启用/禁用」、助手「默认」；
+/// 该行进入删除确认态时隐藏腾宽度）。
+/// can-delete = 删除钮（两步确认：armed 态变红字「确认删除」，再击物理删；
+/// 确认态由宿主页按 id 持有，已删行不显钮）。
 export component RailRow inherits Rectangle {
     in property <RailItem> item;
     in property <bool> current;
+    in property <string> action-label: "";
     in property <bool> can-delete: false;
     in property <bool> delete-armed: false;
     callback clicked();
+    callback action-picked();
     callback delete-picked();
 
     height: 46px;
@@ -286,7 +292,8 @@ export component RailRow inherits Rectangle {
             spacing: 1px;
             Text {
                 text: root.item.name;
-                color: root.item.deleted ? Theme.p.textMuted : Theme.p.textPrimary;
+                color: root.item.deleted || !root.item.enabled
+                        ? Theme.p.textMuted : Theme.p.textPrimary;
                 font-size: 13px;
                 overflow: elide;
             }
@@ -299,12 +306,17 @@ export component RailRow inherits Rectangle {
             }
         }
         // 后声明盖在上层 TouchArea 上，按钮点击不外泄为行选中
+        if root.action-label != "" && !root.delete-armed: Pill {
+            width: self.hug-width;
+            btn-height: 24px;
+            label: root.action-label;
+            picked => { root.action-picked(); }
+        }
         if root.can-delete && !root.item.deleted: Pill {
             width: self.hug-width;
             btn-height: 24px;
-            label: root.delete-armed ? "确认彻底删除" : "删除";
-            danger: !root.delete-armed;
-            primary: root.delete-armed;
+            label: root.delete-armed ? "确认删除" : "删除";
+            danger: root.delete-armed;
             picked => { root.delete-picked(); }
         }
     }

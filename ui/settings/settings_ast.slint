@@ -40,7 +40,7 @@ export component AstPage inherits Rectangle {
     callback ast-autosave();                  // 表单任一改动逐键落库（不回注入）
     callback ast-restored();                  // 恢复（仅历史软删条目）
     callback ast-purged(string);              // 竖栏两步确认/底栏彻底删除（带 id，物理删不可逆）
-    callback ast-defaulted();               // 设为默认助手
+    callback ast-defaulted(string);           // 设默认（带 id：竖栏行钮/底栏按钮，点谁设谁）
     callback ast-avatar-picked();           // 弹系统文件对话框选图
     callback ast-avatar-cleared();
 
@@ -63,6 +63,8 @@ export component AstPage inherits Rectangle {
                 for a in root.asts: RailRow {
                     item: a;
                     current: a.id == root.ast-sel;
+                    // 「默认」钮只给非默认的行（点谁设谁为默认助手）
+                    action-label: !a.deleted && !a.active ? "默认" : "";
                     can-delete: !a.deleted && !a.active; // 默认助手不可删（同底栏旧规则）
                     delete-armed: root.del-armed == a.id;
                     clicked => {
@@ -70,6 +72,7 @@ export component AstPage inherits Rectangle {
                         root.ast-model-open = false;
                         root.del-armed = "";
                     }
+                    action-picked => { root.ast-defaulted(a.id); }
                     delete-picked => {
                         if root.del-armed == a.id {
                             root.del-armed = "";
@@ -250,7 +253,7 @@ export component AstPage inherits Rectangle {
                     if !root.sel-ast-deleted && !root.sel-ast-default: Pill {
                         width: 96px;
                         label: "设为默认";
-                        picked => { root.ast-defaulted(); }
+                        picked => { root.ast-defaulted(root.ast-sel); }
                     }
                 }
             }

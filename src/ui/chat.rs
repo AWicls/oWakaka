@@ -108,7 +108,7 @@ pub(super) fn wire_chat(window: &AppWindow, ctx: &Ctx) {
             };
             // 登记轮次（gen_id 递增、记录本轮模型）后投任务；回流事件打 (sid, gen_id)
             // 标路由回原会话
-            let active_model = models.active.borrow().clone();
+            let (active_prov, active_model) = models.active.borrow().clone();
             let gen_id = {
                 let mut runs = host.runs.borrow_mut();
                 let run = &mut runs[sid];
@@ -123,9 +123,10 @@ pub(super) fn wire_chat(window: &AppWindow, ctx: &Ctx) {
                 history,
                 TurnOptions {
                     // Step C：当前模型声明不支持思考 → 即使开关开着也强制关
-                    thinking: host.thinking_on.get() && models.supports_thinking(&active_model),
+                    thinking: host.thinking_on.get()
+                        && models.supports_thinking(&active_prov, &active_model),
                     // 模型下拉的激活项；config 缺失时为空串→回落客户端默认模型
-                    model: Some(active_model),
+                    model: Some(active_model.clone()),
                     // 会话绑定助手（-1/悬空回落默认）；user 人设全局注入
                     persona: persona_for_turn(
                         &db,

@@ -182,7 +182,7 @@ impl Host {
             return;
         };
         if !a.model.is_empty() {
-            models.pick(window, a.model);
+            models.pick_by_model(window, &a.model);
         }
     }
 
