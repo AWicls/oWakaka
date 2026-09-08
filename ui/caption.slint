@@ -44,9 +44,12 @@ component CaptionBtn inherits Rectangle {
     }
 }
 
-/// 顶部 34px 标题栏：拖拽区 + 右三键。is-maximized / 窗控回调由 AppWindow 桥接
+/// 顶部 34px 标题栏：应用名左置 + 当前页名加粗真居中（绝对定位横跨整栏，
+/// 不参与左右分区布局，右三键宽度不影响其中点）+ 拖拽区 + 右三键。
+/// is-maximized / page-label / 窗控回调由 AppWindow 桥接。
 export component CaptionBar inherits Rectangle {
     in property <bool> is-maximized;
+    in property <string> page-label;
     callback win-minimize();
     callback win-maximize();
     callback win-close();
@@ -69,10 +72,8 @@ export component CaptionBar inherits Rectangle {
             }
 
             Text {
-                width: parent.width;
-                height: parent.height;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+                x: 10px;
+                y: (parent.height - self.height) / 2;
                 text: "oWakaka";
                 color: Theme.p.textMuted;
                 font-size: 12px;
@@ -94,5 +95,19 @@ export component CaptionBar inherits Rectangle {
             danger: true;
             picked => { root.win-close(); }
         }
+    }
+
+    // 页名：绝对定位横跨整栏 → 相对窗口真居中；无 TouchArea，拖动/双击事件穿透到下层拖拽区
+    Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.page-label;
+        color: Theme.p.textPrimary;
+        font-size: 12px;
+        font-weight: 700;
     }
 }

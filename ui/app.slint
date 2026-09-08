@@ -370,6 +370,7 @@ export component AppWindow inherits Window {
         width: root.width;
         height: root.caption-height;
         is-maximized: root.maximized;
+        page-label: root.settings-page ? "设置" : "聊天";
         win-minimize => { root.win-minimize(); }
         win-maximize => { root.win-maximize(); }
         // 关闭直接走 WindowItem.close()：触发 close-requested，默认销毁窗口退出事件循环
