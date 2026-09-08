@@ -258,8 +258,8 @@ export struct RailItem {
 }
 
 /// 列表竖栏的一行：主行名称、副行状态；编辑中底色、使用中强调、删除灰显。
-/// can-delete = 行右侧「删除」钮（两步确认：armed 态变强调色「确认删除」；
-/// 确认态由宿主页按 id 持有，已删行不显钮）。
+/// can-delete = 行右侧删除钮（两步确认：armed 态变强调色「确认彻底删除」，
+/// 再击直接物理删不可逆；确认态由宿主页按 id 持有，已删行不显钮）。
 export component RailRow inherits Rectangle {
     in property <RailItem> item;
     in property <bool> current;
@@ -302,7 +302,7 @@ export component RailRow inherits Rectangle {
         if root.can-delete && !root.item.deleted: Pill {
             width: self.hug-width;
             btn-height: 24px;
-            label: root.delete-armed ? "确认删除" : "删除";
+            label: root.delete-armed ? "确认彻底删除" : "删除";
             danger: !root.delete-armed;
             primary: root.delete-armed;
             picked => { root.delete-picked(); }

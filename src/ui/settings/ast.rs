@@ -178,26 +178,6 @@ pub(super) fn wire_assist(window: &AppWindow, ctx: &Ctx) {
     });
     let window_weak = window.as_weak();
     let db = ctx.db.clone();
-    window.on_ast_deleted(move |id| {
-        let Some(w) = window_weak.upgrade() else {
-            return;
-        };
-        let Ok(id) = id.parse::<i64>() else {
-            return;
-        };
-        match db.soft_delete_assistant(id) {
-            Ok(()) => {
-                if w.get_ast_sel().is_empty() || w.get_ast_sel().parse::<i64>() != Ok(id) {
-                    ast_list_refresh(&db, &w); // 删的是非选中行：只刷列表，不劫持编辑目标
-                } else {
-                    ast_inject(&db, &w, &id.to_string()); // 留在原条目看「已删除」态
-                }
-            }
-            Err(e) => w.set_ast_status(format!("删除失败: {e}").into()),
-        }
-    });
-    let window_weak = window.as_weak();
-    let db = ctx.db.clone();
     window.on_ast_restored(move || {
         let Some(w) = window_weak.upgrade() else {
             return;
@@ -212,17 +192,21 @@ pub(super) fn wire_assist(window: &AppWindow, ctx: &Ctx) {
     });
     let window_weak = window.as_weak();
     let db = ctx.db.clone();
-    window.on_ast_purged(move || {
+    window.on_ast_purged(move |id| {
         let Some(w) = window_weak.upgrade() else {
             return;
         };
-        let Ok(id) = w.get_ast_sel().parse::<i64>() else {
+        let Ok(id) = id.parse::<i64>() else {
             return;
         };
         match db.purge_assistant(id) {
             Ok(()) => {
-                ast_inject(&db, &w, ""); // 条目已没了，回注入兜底选中默认助手
-                w.set_ast_status("已彻底删除".into());
+                if w.get_ast_sel().is_empty() || w.get_ast_sel().parse::<i64>() != Ok(id) {
+                    ast_list_refresh(&db, &w); // 删的是非选中行：只刷列表，不劫持编辑目标
+                } else {
+                    ast_inject(&db, &w, ""); // 条目已没了，回注入兜底选中默认助手
+                    w.set_ast_status("已彻底删除".into());
+                }
             }
             Err(e) => w.set_ast_status(format!("彻底删除失败: {e}").into()),
         }

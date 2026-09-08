@@ -222,9 +222,8 @@ export component ProvPage inherits Rectangle {
     callback prov-selected(string);        // 点列表项 → Rust 回注详情
     callback prov-used();                  // 使用此提供商
     callback prov-autosave();              // 表单任一改动逐键落库（不回注入）
-    callback prov-deleted(string);         // 竖栏行两步确认软删（带 id，可删非选中项）
-    callback prov-restored();              // 恢复
-    callback prov-purged();                // 彻底删除（连带清密钥）
+    callback prov-purged(string);          // 竖栏两步确认/底栏彻底删除（带 id，物理删不可逆）
+    callback prov-restored();              // 恢复（仅历史软删条目）
     callback prov-tested();                // 测试连通（用表单当前值）
 
     property <bool> add-menu: false;       // 新增提供商弹层
@@ -260,7 +259,7 @@ export component ProvPage inherits Rectangle {
                     delete-picked => {
                         if root.del-armed == pr.id {
                             root.del-armed = "";
-                            root.prov-deleted(pr.id);
+                            root.prov-purged(pr.id);
                         } else {
                             root.del-armed = pr.id;
                         }
@@ -594,7 +593,7 @@ export component ProvPage inherits Rectangle {
                     if root.sel-deleted: Pill {
                         width: 72px;
                         label: "彻底删除";
-                        picked => { root.prov-purged(); }
+                        picked => { root.prov-purged(root.prov-sel); }
                     }
 
                     Rectangle {

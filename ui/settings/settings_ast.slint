@@ -38,9 +38,8 @@ export component AstPage inherits Rectangle {
     callback ast-created();
     callback ast-selected(string);
     callback ast-autosave();                  // 表单任一改动逐键落库（不回注入）
-    callback ast-deleted(string);             // 竖栏行两步确认软删（带 id）
-    callback ast-restored();
-    callback ast-purged();
+    callback ast-restored();                  // 恢复（仅历史软删条目）
+    callback ast-purged(string);              // 竖栏两步确认/底栏彻底删除（带 id，物理删不可逆）
     callback ast-defaulted();               // 设为默认助手
     callback ast-avatar-picked();           // 弹系统文件对话框选图
     callback ast-avatar-cleared();
@@ -74,7 +73,7 @@ export component AstPage inherits Rectangle {
                     delete-picked => {
                         if root.del-armed == a.id {
                             root.del-armed = "";
-                            root.ast-deleted(a.id);
+                            root.ast-purged(a.id);
                         } else {
                             root.del-armed = a.id;
                         }
@@ -237,7 +236,7 @@ export component AstPage inherits Rectangle {
                     if root.sel-ast-deleted: Pill {
                         width: 72px;
                         label: "彻底删除";
-                        picked => { root.ast-purged(); }
+                        picked => { root.ast-purged(root.ast-sel); }
                     }
                     Rectangle {
                         horizontal-stretch: 1;

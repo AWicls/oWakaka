@@ -365,31 +365,6 @@ pub(in crate::ui) fn wire_prov(window: &AppWindow, ctx: &crate::ui::Ctx) {
             *cache.lock().unwrap() = None; // 编辑可能改了使用中的条目，重建客户端
         }
     });
-    window.on_prov_deleted({
-        let window_weak = window.as_weak();
-        let cache = cache.clone();
-        let db = db.clone();
-        move |id| {
-            let Some(w) = window_weak.upgrade() else {
-                return;
-            };
-            let id = id.to_string();
-            if id.is_empty() {
-                return;
-            }
-            match Providers::soft_delete(&db, &id) {
-                Ok(()) => {
-                    *cache.lock().unwrap() = None;
-                    if w.get_prov_sel() == id.as_str() {
-                        prov_inject(&db, &w, &id); // 留在原条目看"已删除"态
-                    } else {
-                        prov_list_refresh(&db, &w); // 删的是非选中行：只刷列表，不劫持编辑目标
-                    }
-                }
-                Err(e) => w.set_prov_status(format!("删除失败: {e}").into()),
-            }
-        }
-    });
     window.on_prov_restored({
         let window_weak = window.as_weak();
         let cache = cache.clone();
@@ -415,19 +390,23 @@ pub(in crate::ui) fn wire_prov(window: &AppWindow, ctx: &crate::ui::Ctx) {
         let window_weak = window.as_weak();
         let cache = cache.clone();
         let db = db.clone();
-        move || {
+        move |id| {
             let Some(w) = window_weak.upgrade() else {
                 return;
             };
-            let id = w.get_prov_sel().to_string();
+            let id = id.to_string();
             if id.is_empty() {
                 return;
             }
             match Providers::purge(&db, "config.toml", &id) {
                 Ok(()) => {
                     *cache.lock().unwrap() = None;
-                    prov_inject(&db, &w, ""); // 条目已没了，回注入兜底选中
-                    w.set_prov_status("已彻底删除".into());
+                    if w.get_prov_sel() == id.as_str() {
+                        prov_inject(&db, &w, ""); // 条目已没了，回注入兜底选中
+                        w.set_prov_status("已彻底删除".into());
+                    } else {
+                        prov_list_refresh(&db, &w); // 删的是非选中行：只刷列表，不劫持编辑目标
+                    }
                 }
                 Err(e) => w.set_prov_status(format!("彻底删除失败: {e}").into()),
             }
