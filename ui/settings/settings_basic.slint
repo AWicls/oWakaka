@@ -1,5 +1,5 @@
-// 设置域两小页：界面设定（主题三态，直改 Theme 全局即时生效）+ 用户设定（用户人设）。
-// 装配（页切换、状态行、保存按钮行）见 app.slint 设置块。
+// 设置域两小页：界面设定（主题三态，直改 Theme 全局即时生效）+ 用户设定（用户人设，自动保存）。
+// 装配（页切换、状态行、人设自动保存接线）见 app.slint 设置块。
 
 import { Theme, Card } from "../theme.slint";
 import { Pill, PromptRow } from "../common/controls.slint";
@@ -68,7 +68,7 @@ export component ThemePage inherits Card {
     }
 }
 
-/// 用户设定页：编辑态由宿主装配层持有（切页不丢），保存按钮在宿主底栏
+/// 用户设定页：编辑态由宿主装配层持有（切页不丢），persona 一变即自动落库，无保存按钮
 export component UserPage inherits Card {
     in-out property <string> persona;
 

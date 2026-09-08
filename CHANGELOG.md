@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Changed
+- 用户设定页改**自动保存**：撤除宿主底栏「保存」按钮，人设编辑框每次变化即落库（persona user 活跃行），状态行回显「已自动保存，下一次发送生效」。防误写：进页首求值与基准同源相等不触发，仅真实编辑触发；逐键直写 SQLite 单行 upsert，未加防抖（量级不需要）
 - 设置域左竖栏宽度统一：新增 `theme.slint` `Metrics.rail-width()` 布局度量（`public pure function`），导航卡与提供商/助手列表卡三处原各自 `Math.max/min` 公式（104–150 / 120–180）收敛为同一来源（150–210，随窗宽 18%），与聊天侧栏默认 190px 同量级
 - UI 逻辑层按三个界面域分级归位（内部重构，行为等价；`fmt`/`clippy`/`test` 全绿）：`src/ui/` 根下平铺的 7 个模块 → `frame.rs`（边框）+ `chat.rs` + `chat/{host,session,bubbles,models}.rs`（聊天）+ `settings.rs` + `settings/{prov,ast}.rs`（设置）。原 563 行 `host.rs` 拆分：多会话簿记留 `chat/host.rs`，会话栏/回收站接线迁 `chat/session.rs`；原 340 行 `settings.rs` 拆分：装配 + 头像小工具留本体，AI 助手页三函数 + 接线迁 `settings/ast.rs`；`prov.rs` 迁入 `settings/`。跨 `chat` 边界的可见性标注由 `pub(super)` 还原为 `pub(in crate::ui)`（等价迁移前语义）
 - 设置域 Slint 文件按页拆分（内部重构，行为等价）：原 1401 行 `settings.slint` → `settings.slint`（导航卡 44 行）+ `settings_prov.slint`（LLM 提供商页 + 模型管理 670 行）+ `settings_ast.slint`（AI 助手页 306 行）+ `settings_basic.slint`（界面设定/用户设定 95 行）；**删除 `SettingsPage` 中间透传层**——app.slint 设置块直挂页面组件（单层接线），页切换状态/用户人设编辑态收归装配层局部。远端模型/默认模型弹层随所属页面挂本页区域（遮罩不再盖导航栏）

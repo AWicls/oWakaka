@@ -1,4 +1,4 @@
-//! 设置域装配：整页进出（注入提供商/助手档案与用户人设初值）、用户设定页保存，
+//! 设置域装配：整页进出（注入提供商/助手档案与用户人设初值）、用户设定页自动保存，
 //! 兼头像小工具（色板/首字/加载——聊天卡头栏与 AI 助手页共用）。
 //! LLM 提供商页见 [`prov`]，AI 助手页见 [`ast`]。
 
@@ -51,10 +51,10 @@ pub(super) fn load_avatar(path: &str) -> Image {
     }
 }
 
-/// 用户设定页「保存」= 全局用户人设（persona user 活跃行；助手字段已迁 AI 助手页）。
+/// 用户设定页自动保存 = 全局用户人设（persona user 活跃行；助手字段已迁 AI 助手页）。
 pub(super) fn save_user_persona(db: &Db, user_persona: &str) -> SharedString {
     match db.upsert_active_persona("user", "默认人设", user_persona.trim(), None) {
-        Ok(()) => "已保存，下一次发送生效".into(),
+        Ok(()) => "已自动保存，下一次发送生效".into(),
         Err(e) => format!("保存失败: {e}").into(),
     }
 }
@@ -99,7 +99,7 @@ pub(super) fn wire_settings(window: &AppWindow, ctx: &super::Ctx) {
         };
         let status = save_user_persona(&db, &user_persona);
         w.set_cfg_status(status);
-        // 整页设置不自动跳回，留在本页回显成功/失败；用户点「返回」退出
+        // 用户人设为逐键自动保存触发：只回显状态，不跳页；用户点「返回」退出
     });
     ast::wire_assist(window, ctx);
 }

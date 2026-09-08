@@ -16,7 +16,7 @@ import { AstPage } from "settings/settings_ast.slint";
 import { ThemePage, UserPage } from "settings/settings_basic.slint";
 import { CaptionBar } from "common/caption.slint";
 import { TrashOverlay, TrashItem } from "common/trash.slint";
-import { RailItem, Avatar, Pill } from "common/controls.slint";
+import { RailItem, Avatar } from "common/controls.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct（TrashItem 定义见 trash.slint，RailItem 见 controls.slint）
 export { ChatMessage, SessionItem, ModelItem, RailItem, ModelRow, RemoteRow, TrashItem }
@@ -127,8 +127,8 @@ export component AppWindow inherits Window {
     callback model-picked(string); // 选择模型（Rust 切换激活 + 回写设置 kv）
     callback models-requested(); // 打开下拉时请求刷新远端模型清单（异步 /models）
     callback settings-requested(); // 进入设置整页（Rust 读配置注入初值 + settings-page 置 true）
-    callback settings-saved(string); // 用户人设（persona user 页保存；提供商/助手页卡内保存）
-    callback settings-back(); // 返回对话（放弃未保存编辑）
+    callback settings-saved(string); // 用户人设自动保存（编辑即存；提供商/助手页卡内保存）
+    callback settings-back(); // 返回对话（用户人设编辑均已即时落库）
     // —— 标题栏窗控桥（Rust ui/frame.rs 实现拖窗/最小化等原生动作） ——
     callback win-minimize();
     callback win-maximize(); // 最大化/还原互换（标题栏按钮与拖拽区双击共用）
@@ -297,6 +297,14 @@ export component AppWindow inherits Window {
         // 当前分区页 + 用户人设编辑态（跨页存续，初值 = 注入的落盘配置）
         property <int> tab: 0;
         property <string> ed-persona: root.cfg-user-persona;
+        // 自动保存：changed 首求值时两属性同源相等 → 进页不误写；此后每次差值即落库
+        property <string> ed-persona-saved: root.cfg-user-persona;
+        changed ed-persona => {
+            if ed-persona != ed-persona-saved {
+                ed-persona-saved = ed-persona;
+                root.settings-saved(ed-persona);
+            }
+        }
 
         HorizontalLayout {
             spacing: 10px;
@@ -391,20 +399,6 @@ export component AppWindow inherits Window {
             wrap: word-wrap;
         }
 
-        // 全局「保存」只服务用户设定页；提供商/AI 助手页在详情卡内保存
-        if settings-vl.tab == 2 : HorizontalLayout {
-            spacing: 8px;
-            height: 30px;
-            Rectangle { horizontal-stretch: 1; }
-            Pill {
-                width: 88px;
-                label: "保存";
-                primary: true;
-                picked => {
-                    root.settings-saved(settings-vl.ed-persona);
-                }
-            }
-        }
     }
 
     // 标题栏 z 序最后绘制：盖在回收站遮罩之上，任何页面都能窗控
