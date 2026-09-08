@@ -1,52 +1,15 @@
-// 程序内设置整页（与对话界面切换）：左导航（界面/提供商/AI 助手/用户设定）+ 右内容卡片。
+// 程序内设置整页（与对话界面切换）：左导航（界面设定/LLM 提供商/用户设定/AI 助手设定，
+// 返回钮置导航卡左下角）+ 右内容卡片。
 // 数据源：DB 设置 kv + persona 活跃行 + Theme 全局（界面页直改，即时生效）。
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
 import { ScrollView } from "std-widgets.slint";
-import { Theme, Icon, IconKind, Card } from "theme.slint";
+import { Theme, IconKind, Card } from "theme.slint";
 import { ModelItem } from "input.slint";
 import {
-    Avatar, FieldRow, Pill, PromptRow, MenuOpt, NavItem, RailItem, RailRow, Modal,
+    Avatar, FieldRow, Pill, PromptRow, MenuOpt, NavItem, IconButton,
+    RailItem, RailRow, Modal,
 } from "controls.slint";
-
-/// 返回钮（导航卡顶部，与「设置」标题并排）：左箭头 + 文字，可被外层布局定宽
-component BackButton inherits Rectangle {
-    callback clicked();
-
-    height: 26px;
-    border-radius: 7px;
-    border-width: 1px;
-    border-color: Theme.p.inputBorder;
-    background: ta.has-hover ? Theme.p.listHover : Theme.p.panelBg;
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-    HorizontalLayout {
-        padding: 6px;
-        spacing: 4px;
-        // Rectangle 随布局吃满行高，Icon 定高居中（Slint 布局对固定高元素不垂直居中）
-        Rectangle {
-            width: 14px;
-            Icon {
-                x: 0;
-                y: (parent.height - self.height) / 2;
-                width: 14px;
-                height: 14px;
-                kind: IconKind.arrow-left;
-                ink: Theme.p.textSecondary;
-            }
-        }
-        Text {
-            text: "返回";
-            color: Theme.p.textPrimary;
-            font-size: 12px;
-            vertical-alignment: center;
-        }
-    }
-}
 
 /// 模型管理行：当前提供商已配置的模型（含能力位）
 export struct ModelRow {
@@ -213,9 +176,9 @@ component ModelCard inherits Rectangle {
     }
 }
 
-/// 全屏设置页：顶栏返回 + 左导航四分区。提供商页 = 列表卡 + 详情卡，
+/// 全屏设置页：左导航四分区（返回钮置导航卡左下角）。提供商页 = 列表卡 + 详情卡，
 /// 字段以 Rust 侧 providers 整包为真相源（in-out 双向链，操作即时回注）；
-/// persona 两页存页面级 ed-* 编辑态，底部「保存」一次性提交。
+/// 用户设定页存页面级 ed-* 编辑态，底部「保存」一次性提交。
 /// 各分区页是 if-block 实例，切页销毁重建。
 export component SettingsPage inherits Rectangle {
     // —— 提供商页（Rust 注入/回注；密钥框恒注空，提交空 = 不改已存） ——
@@ -283,7 +246,7 @@ export component SettingsPage inherits Rectangle {
     callback saved(string);                 // 用户人设（助手字段已迁 AI 助手页）
     callback back();
 
-    // 0 界面（默认）| 1 提供商 | 2 AI 助手 | 3 用户设定
+    // 0 界面设定（默认）| 1 LLM 提供商 | 2 用户设定 | 3 AI 助手设定
     property <int> page: 0;
     property <bool> add-menu: false;        // 新增提供商弹层
     property <bool> remote-open: false;     // 远端模型清单弹层（拉取按钮开启，遮罩关闭）
@@ -305,48 +268,37 @@ export component SettingsPage inherits Rectangle {
             spacing: 10px;
             vertical-stretch: 1;
 
-            // —— 左：分类导航卡（返回置顶；宽度随窗口收放） ——
+            // —— 左：分类导航卡（返回钮置左下角，与聊天侧栏底栏同形态；页名由标题栏中央承担） ——
             Card {
                 width: Math.max(104px, Math.min(150px, root.width * 0.14));
                 VerticalLayout {
                     padding: 8px;
                     spacing: 4px;
-                    // 返回 + 「设置」标题并排一行（返回在左，钮缩小）
-                    HorizontalLayout {
-                        height: 26px;
-                        spacing: 6px;
-                        BackButton {
-                            width: 58px;
-                            clicked => { root.back(); }
-                        }
-                        Text {
-                            text: "设置";
-                            color: Theme.p.textPrimary;
-                            font-size: 15px;
-                            vertical-alignment: center;
-                        }
-                    }
                     NavItem {
-                        label: "界面";
+                        label: "界面设定";
                         selected: root.page == 0;
                         picked => { root.page = 0; }
                     }
                     NavItem {
-                        label: "提供商";
+                        label: "LLM 提供商";
                         selected: root.page == 1;
                         picked => { root.page = 1; }
                     }
                     NavItem {
-                        label: "AI 助手";
+                        label: "用户设定";
                         selected: root.page == 2;
                         picked => { root.page = 2; }
                     }
                     NavItem {
-                        label: "用户设定";
+                        label: "AI 助手设定";
                         selected: root.page == 3;
                         picked => { root.page = 3; }
                     }
                     Rectangle { vertical-stretch: 1; }
+                    IconButton {
+                        icon: IconKind.arrow-left;
+                        clicked => { root.back(); }
+                    }
                 }
             }
 
@@ -703,7 +655,7 @@ export component SettingsPage inherits Rectangle {
             }
 
             // —— AI 助手页：列表卡 + 详情卡（Rust 为真相源，「完成」写回） ——
-            if root.page == 2 : HorizontalLayout {
+            if root.page == 3 : HorizontalLayout {
                 spacing: 10px;
                 // if-block 子元素不自动占位：无此行则不随窗口撑满
                 horizontal-stretch: 1;
@@ -894,14 +846,14 @@ export component SettingsPage inherits Rectangle {
             }
 
             // —— 其余分区：单内容卡 ——
-            if root.page == 0 || root.page == 3 : Card {
+            if root.page == 0 || root.page == 2 : Card {
                 horizontal-stretch: 1;
                 VerticalLayout {
                     padding: 18px;
                     spacing: 10px;
 
                     Text {
-                        text: root.page == 0 ? "界面" : "用户设定";
+                        text: root.page == 0 ? "界面设定" : "用户设定";
                         color: Theme.p.textPrimary;
                         font-size: 14px;
                     }
@@ -946,7 +898,7 @@ export component SettingsPage inherits Rectangle {
                         Rectangle { vertical-stretch: 1; }
                     }
 
-                    if root.page == 3 : VerticalLayout {
+                    if root.page == 2 : VerticalLayout {
                         spacing: 10px;
                         PromptRow {
                             label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
@@ -968,7 +920,7 @@ export component SettingsPage inherits Rectangle {
         }
 
         // 全局「保存」只服务用户设定页；提供商/AI 助手页在详情卡内保存
-        if root.page == 3 : HorizontalLayout {
+        if root.page == 2 : HorizontalLayout {
             spacing: 8px;
             height: 30px;
             Rectangle { horizontal-stretch: 1; }
