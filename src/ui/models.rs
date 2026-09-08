@@ -178,7 +178,7 @@ pub(super) fn wire_models(window: &AppWindow, ctx: &super::Ctx) {
         if models.fetched.get() {
             return; // 已成功拉取过，不重复请求
         }
-        let Ok(client) = super::ensure_client(&cache, &db) else {
+        let Ok(client) = super::chat::ensure_client(&cache, &db) else {
             return; // 配置缺失：下拉仍可用 config 清单，不打扰
         };
         models.fetched.set(true);
