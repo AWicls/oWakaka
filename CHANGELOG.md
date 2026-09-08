@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+### Changed
+- 三个「胖入口」文件深度拆分下沉，本体收敛为入口/装配层（纯内部重构，行为与视觉零变化；`cargo fmt`/`clippy`/`test` 全绿）：
+  - `db.rs` 249→166 行：表 DDL、时间戳表达式与版本策略（重建 / 补结构例外）下沉 `db/schema.rs`，`NOW`/`SCHEMA_VERSION` 经 `db.rs` 再导出保持子模块 `use super` 路径不变
+  - `ui.rs` 378→161 行：对话核心接线（`wire_chat`/`wire_timer`、懒建客户端 `ensure_client`、轮次人设组装）下沉 `ui/chat.rs`，`ui.rs` 仅留 `Ctx`、回传类型与 `run()` 装配
+  - `app.slint` 572→379 行：自绘标题栏（`CaptionBar`/`CaptionBtn`）拆出 `caption.slint`、回收站浮层（遮罩 + 居中卡合成 `TrashOverlay`、`TinyBtn`、`TrashItem`）拆出 `trash.slint`，`app.slint` 仅留 `AppWindow` 装配
+
 ### Fixed
 - 双击 release 产物 `oWakaka.exe` 会先弹出一个 cmd 控制台窗口：Rust 可执行目标默认编译为**控制台子系统**，Windows 为其分配控制台。`main.rs` 加 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`——release 切 GUI 子系统（PE Subsystem 实测由 3 变 2），debug 保留控制台以照常看 `cargo run` 的诊断输出。已知代价：release 下 `eprintln!` 类启动提示（如「DB 打开失败，本运行不持久化」）不再可见
 
