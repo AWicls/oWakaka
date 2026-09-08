@@ -9,17 +9,17 @@ use slint::{Model, SharedString, VecModel};
 
 use crate::ai::dto::openai_chat::request::Message;
 
-use super::ChatMessage;
+use crate::ui::ChatMessage;
 
 /// 思考展示态取值，与 `ui/app.slint` 中 `ChatMessage.tstate` 的注释约定一致
 const STATE_COLLAPSED: i32 = 0;
 /// 默认态：最多 5 行、按内容自适应高度，思考完成后会被自动收起
-pub(super) const STATE_PARTIAL: i32 = 1;
+pub(in crate::ui) const STATE_PARTIAL: i32 = 1;
 
 /// 气泡列表即会话历史：转成请求消息列表（刚输入的 user 消息已含在内）。
 ///
 /// 空文本转 `None`，与响应侧 `content: null` 的线格式约定对齐。
-pub(super) fn snapshot_history(messages: &Rc<VecModel<ChatMessage>>) -> Vec<Message> {
+pub(in crate::ui) fn snapshot_history(messages: &Rc<VecModel<ChatMessage>>) -> Vec<Message> {
     messages
         .iter()
         .map(|m| Message {
@@ -34,7 +34,7 @@ pub(super) fn snapshot_history(messages: &Rc<VecModel<ChatMessage>>) -> Vec<Mess
 ///
 /// `thinking=true` 追加到思考过程，`false` 追加到回答正文；追加正文即视为
 /// "思考已完成"，同步触发自动收起（见 [`fold_thinking`]）。
-pub(super) fn append_part(messages: &Rc<VecModel<ChatMessage>>, thinking: bool, text: &str) {
+pub(in crate::ui) fn append_part(messages: &Rc<VecModel<ChatMessage>>, thinking: bool, text: &str) {
     let last = messages.row_count().saturating_sub(1);
     if let Some(mut row) = messages.row_data(last)
         && row.role == "assistant"
@@ -73,7 +73,7 @@ fn fold_thinking(row: &mut ChatMessage) {
 }
 
 /// 对尾部 assistant 气泡执行 [`fold_thinking`]（Done 兜底：只思考不答的流）。
-pub(super) fn fold_tail(messages: &Rc<VecModel<ChatMessage>>) {
+pub(in crate::ui) fn fold_tail(messages: &Rc<VecModel<ChatMessage>>) {
     let last = messages.row_count().saturating_sub(1);
     if let Some(mut row) = messages.row_data(last)
         && row.role == "assistant"

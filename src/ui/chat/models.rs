@@ -13,7 +13,7 @@ use crate::ai::{config::Config, providers::Providers};
 use crate::db::Db;
 use slint::{ComponentHandle, SharedString, VecModel};
 
-use super::{AppWindow, ModelItem};
+use crate::ui::{AppWindow, ModelItem};
 
 /// 当前提供商的模型 id → 是否支持思考（Step B 能力位的第一个消费点）。
 fn load_caps(db: &Db) -> BTreeMap<String, bool> {
@@ -33,18 +33,18 @@ fn load_caps(db: &Db) -> BTreeMap<String, bool> {
 /// 模型切换下拉的 UI 状态：数据源、激活 ID、别名表（当前提供商模型）、思考能力表；
 /// `fetched` 防抖——首次打开下拉才拉远端 `/models`，失败时下回打开可重试
 #[derive(Clone)]
-pub(super) struct ModelsState {
+pub(in crate::ui) struct ModelsState {
     db: Rc<Db>,
     items: Rc<VecModel<ModelItem>>,
-    pub(super) active: Rc<RefCell<String>>,
+    pub(in crate::ui) active: Rc<RefCell<String>>,
     aliases: Rc<RefCell<BTreeMap<String, String>>>,
     caps: Rc<RefCell<BTreeMap<String, bool>>>,
-    pub(super) fetched: Rc<Cell<bool>>,
+    pub(in crate::ui) fetched: Rc<Cell<bool>>,
 }
 
 impl ModelsState {
     /// 初始值取自运行配置（model + 提供商模型别名/能力）；读不到则空激活（发送回落客户端默认）
-    pub(super) fn from_config(db: Rc<Db>) -> Self {
+    pub(in crate::ui) fn from_config(db: Rc<Db>) -> Self {
         let (active, aliases) = match Config::load(&db) {
             Ok(cfg) => (cfg.model, cfg.models),
             Err(_) => (String::new(), BTreeMap::new()),
@@ -72,7 +72,7 @@ impl ModelsState {
     }
 
     /// 重建下拉清单：{激活} ∪ config 别名键 ∪ 远端结果，去重保序（激活恒首位）
-    pub(super) fn rebuild(&self, remote: Option<&[String]>) {
+    pub(in crate::ui) fn rebuild(&self, remote: Option<&[String]>) {
         let active = self.active.borrow().clone();
         let mut ids: Vec<String> = Vec::new();
         {
@@ -111,7 +111,7 @@ impl ModelsState {
     }
 
     /// 把状态同步到窗口（下拉数据源 + 模型按钮文案 + 思考能力位）
-    pub(super) fn apply(&self, window: &AppWindow) {
+    pub(in crate::ui) fn apply(&self, window: &AppWindow) {
         window.set_models(self.items.clone().into());
         let active = self.active.borrow().clone();
         let label = if active.is_empty() {
@@ -125,12 +125,12 @@ impl ModelsState {
     }
 
     /// 当前激活模型是否支持思考（未登记的模型视为支持，绝不误关）
-    pub(super) fn supports_thinking(&self, id: &str) -> bool {
+    pub(in crate::ui) fn supports_thinking(&self, id: &str) -> bool {
         self.caps.borrow().get(id).copied().unwrap_or(true)
     }
 
     /// 从设置页返回后重拉提供商数据源（模型增删/别名/能力可能已变）
-    pub(super) fn sync_store(&self, window: &AppWindow) {
+    pub(in crate::ui) fn sync_store(&self, window: &AppWindow) {
         if let Ok(cfg) = Config::load(&self.db) {
             *self.aliases.borrow_mut() = cfg.models;
         }
@@ -141,7 +141,7 @@ impl ModelsState {
 
     /// 切换激活模型：本会话即时生效（后续发送携带）并回写设置（DB kv），
     /// 回写失败仅影响重启后持久，打日志不阻断
-    pub(super) fn pick(&self, window: &AppWindow, id: String) {
+    pub(in crate::ui) fn pick(&self, window: &AppWindow, id: String) {
         if id.is_empty() || id == *self.active.borrow() {
             return;
         }
@@ -161,7 +161,7 @@ impl ModelsState {
 }
 
 /// 模型下拉接线：选择即时生效并回写 config；打开下拉首次异步拉远端 /models。
-pub(super) fn wire_models(window: &AppWindow, ctx: &super::Ctx) {
+pub(in crate::ui) fn wire_models(window: &AppWindow, ctx: &crate::ui::Ctx) {
     let window_weak = window.as_weak();
     let models = ctx.models.clone();
     window.on_model_picked(move |id| {
@@ -178,14 +178,14 @@ pub(super) fn wire_models(window: &AppWindow, ctx: &super::Ctx) {
         if models.fetched.get() {
             return; // 已成功拉取过，不重复请求
         }
-        let Ok(client) = super::chat::ensure_client(&cache, &db) else {
+        let Ok(client) = super::ensure_client(&cache, &db) else {
             return; // 配置缺失：下拉仍可用 config 清单，不打扰
         };
         models.fetched.set(true);
         let tx = tx.clone();
         runtime.spawn(async move {
             let result = client.list_models().await.map_err(|e| e.to_string());
-            let _ = tx.send(super::UiMsg::Models(result));
+            let _ = tx.send(crate::ui::UiMsg::Models(result));
         });
     });
 }

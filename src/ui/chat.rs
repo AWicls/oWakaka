@@ -1,7 +1,18 @@
-//! 对话核心接线：发送（贴气泡 → 快照历史 → 后台轮）、停止、思考开关，以及后台事件
+//! 对话域入口：发送（贴气泡 → 快照历史 → 后台轮）、停止、思考开关，以及后台事件
 //! 回流 Timer（按 (sid, gen) 路由写回发起会话）。[`super`] 的 `run()` 建好 [`Ctx`] 后
 //! 调 [`wire_chat`] / [`wire_timer`] 完成接线；共享句柄束与回传消息类型（[`UiMsg`]、
 //! [`ClientCache`]）定义在 `ui.rs`，本页只消费。
+//!
+//! 域内子模块：[`host`]（多会话簿记）、[`session`]（会话栏/回收站接线）、
+//! [`bubbles`]（气泡模型操作）、[`models`]（模型下拉状态机）。
+
+mod bubbles;
+pub(super) mod host;
+pub(super) mod models;
+pub(super) mod session;
+
+pub(super) use host::{Host, RunRef, StreamMsg};
+pub(super) use models::ModelsState;
 
 use std::{
     sync::{Arc, mpsc},
@@ -10,16 +21,14 @@ use std::{
 
 use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 
-use super::{
-    AppWindow, ChatMessage, ClientCache, Ctx, UiMsg,
-    bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history},
-    host::{RunRef, StreamMsg},
-    prov,
-};
+use super::{AppWindow, ChatMessage, ClientCache, Ctx, UiMsg};
 use crate::{
     ai::client::{Client, TurnEvent, TurnOptions, TurnPersona},
     db::Db,
+    ui::settings::{on_fetch_result, on_test_result},
 };
+
+use self::bubbles::{STATE_PARTIAL, append_part, fold_tail, snapshot_history};
 
 /// 取（必要时懒建）客户端；`Err` 携带可直接展示的文案。
 /// 请求组装/取消编排已下沉至 [`Client::spawn_turn`](crate::ai::client::Client::spawn_turn)。
@@ -188,11 +197,11 @@ pub(super) fn wire_timer(window: &AppWindow, ctx: &Ctx, rx: mpsc::Receiver<UiMsg
                     continue;
                 }
                 UiMsg::ProvTest(msg) => {
-                    prov::on_test_result(&window, msg);
+                    on_test_result(&window, msg);
                     continue;
                 }
                 UiMsg::ProvFetch(result) => {
-                    prov::on_fetch_result(&window, result);
+                    on_fetch_result(&window, result);
                     continue;
                 }
             };

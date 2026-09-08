@@ -28,16 +28,15 @@
 //! - `ui/host.rs`：多会话簿记 + 会话栏接线 `wire_sidebar`（侧栏/回收站）+ `refresh_trash`
 //! - `ui/frame.rs`：无边框窗框接线 `wire_frame`——标题栏三键与 winit 原生拖窗
 //! - `ui/bubbles.rs`：气泡模型操作（增量合并、思考折叠、历史投影）
-//! - `ui/models.rs`：模型下拉状态机 `ModelsState` + 接线 `wire_models`
-//! - `ui/prov.rs`：提供商页装配（providers 整包 ↔ 窗口）+ 接线 `wire_prov`
-//! - `ui/settings.rs`：设置页保存 + 接线 `wire_settings`
-
-mod bubbles;
+//!
+//! # 文件结构（按三个界面域分级）
+//! - `frame.rs`：无边框窗框——标题栏三键与 winit 原生拖窗（边框域）
+//! - `chat.rs` + `chat/`：对话域入口接线（发送/停止/回流）与
+//!   `chat/{host,session,bubbles,models}.rs`（簿记/侧栏/气泡/模型下拉）
+//! - `settings.rs` + `settings/`：设置域装配（进出/用户人设/头像工具）与
+//!   `settings/{prov,ast}.rs`（LLM 提供商页 / AI 助手页）
 mod chat;
 mod frame;
-mod host;
-mod models;
-mod prov;
 mod settings;
 
 use std::{
@@ -49,8 +48,7 @@ use crate::ai::{client::Client, providers::Providers};
 use crate::db::Db;
 use slint::SharedString;
 
-use host::{Host, StreamMsg};
-use models::ModelsState;
+use chat::{Host, ModelsState, StreamMsg};
 
 slint::include_modules!();
 
@@ -115,7 +113,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
             }
         });
     }
-    host::refresh_trash(&db, &window);
+    chat::session::refresh_trash(&db, &window);
 
     let models = ModelsState::from_config(db.clone());
     models.apply(&window);
@@ -136,14 +134,14 @@ pub fn run() -> Result<(), slint::PlatformError> {
     // —— 接线：每页一块；会话核心（发送/停止/回流）留在本文件，页面归各子模块 ——
     ctx.host.sync_assistant_header(&window); // 启动首屏：当前会话助手进头栏
     frame::wire_frame(&window);
-    host::wire_sidebar(&window, &ctx);
+    chat::session::wire_sidebar(&window, &ctx);
     chat::wire_chat(&window, &ctx);
 
-    models::wire_models(&window, &ctx);
+    chat::models::wire_models(&window, &ctx);
 
     settings::wire_settings(&window, &ctx);
 
-    prov::wire_prov(&window, &ctx);
+    settings::prov::wire_prov(&window, &ctx);
 
     // —— 复制路径：Slint 无剪贴板 API，经 arboard 写系统剪贴板 ——
     window.on_copy(move |text| {

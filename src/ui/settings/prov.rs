@@ -14,7 +14,7 @@ use crate::ai::{
 use crate::db::Db;
 use slint::{ComponentHandle, SharedString, VecModel};
 
-use super::{AppWindow, ModelRow, RailItem, RemoteRow};
+use crate::ui::{AppWindow, ModelRow, RailItem, RemoteRow};
 
 /// 表单 api 序号 ↔ 枚举（0 chat | 1 responses）
 fn api_of(i: i32) -> Api {
@@ -30,7 +30,7 @@ fn api_to_i(api: Api) -> i32 {
 
 /// 重注入提供商列表与详情。select 为空 = 维持当前选中；选中失效回落 active。
 /// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
-pub(super) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
+pub(in crate::ui) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
     let ps = Providers::load(db).unwrap_or_default();
     let rows: Vec<RailItem> = ps
         .list
@@ -124,8 +124,8 @@ pub(super) fn remote_mark_added(window: &AppWindow, model_id: &str, added: bool)
 }
 
 /// 远端清单异步回包 → 窗口：按「未添加优先 + id 升序」重排注入并复位加载态。
-/// 入参与 [`UiMsg::ProvFetch`] 一致，由 ui.rs 的回流 Timer 转调（页面逻辑归本页）。
-pub(super) fn on_fetch_result(window: &AppWindow, result: Result<Vec<String>, String>) {
+/// 入参与 [`UiMsg::ProvFetch`](crate::ui::UiMsg::ProvFetch) 一致，由 ui.rs 的回流 Timer 转调（页面逻辑归本页）。
+pub(in crate::ui) fn on_fetch_result(window: &AppWindow, result: Result<Vec<String>, String>) {
     use slint::Model;
     match result {
         Ok(ids) => {
@@ -154,7 +154,7 @@ pub(super) fn on_fetch_result(window: &AppWindow, result: Result<Vec<String>, St
 }
 
 /// 连通测试异步回包 → 窗口：文案直接写 prov-status。
-pub(super) fn on_test_result(window: &AppWindow, msg: SharedString) {
+pub(in crate::ui) fn on_test_result(window: &AppWindow, msg: SharedString) {
     window.set_prov_status(msg);
 }
 
@@ -288,7 +288,7 @@ pub(super) fn prov_test_config(db: &Db, window: &AppWindow) -> Option<Config> {
 /// 提供商页接线：列表/详情即时读写 providers 整包（Step A 骨架）＋
 /// Step B 模型管理（拉远端 / ＋添加 / 自定义 / 别名 / 能力勾选 / 移除）。
 /// 回连按钮均重建客户端缓存（下一次发送即用新配置）。
-pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
+pub(in crate::ui) fn wire_prov(window: &AppWindow, ctx: &crate::ui::Ctx) {
     let db = ctx.db.clone();
     let cache = ctx.cache.clone();
     let runtime = ctx.runtime.clone();
@@ -445,7 +445,7 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
                         format!("连接失败：{brief}")
                     }
                 };
-                let _ = tx.send(super::UiMsg::ProvTest(msg.into()));
+                let _ = tx.send(crate::ui::UiMsg::ProvTest(msg.into()));
             });
         }
     });
@@ -468,7 +468,7 @@ pub(super) fn wire_prov(window: &AppWindow, ctx: &super::Ctx) {
             let tx = tx.clone();
             runtime.spawn(async move {
                 let result = client.list_models().await.map_err(|e| e.to_string());
-                let _ = tx.send(super::UiMsg::ProvFetch(result));
+                let _ = tx.send(crate::ui::UiMsg::ProvFetch(result));
             });
         }
     });
