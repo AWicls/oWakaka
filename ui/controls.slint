@@ -1,0 +1,331 @@
+// 通用控件库：全应用（聊天/设置/浮层）共享的表单控件、按钮、头像、弹层与左竖栏列表行。
+// 与 theme.slint（设计令牌 + 图元 Icon + Card + OptionRow）的分工：本文件是「可交互控件」，
+// theme 是「色板/图元/容器」。配色一律取 Theme.p，禁止在此另写色值。
+
+import { TextEdit } from "std-widgets.slint";
+import { Theme, Icon, IconKind, Card } from "theme.slint";
+
+/// 标签 + 单行输入框（空值时显示灰色提示）
+export component FieldRow inherits Rectangle {
+    in property <string> label;
+    in-out property <string> text;
+    in property <string> hint;
+
+    height: 52px;
+    VerticalLayout {
+        spacing: 3px;
+        Text {
+            text: root.label;
+            color: Theme.p.textMuted;
+            font-size: 12px;
+        }
+        Rectangle {
+            height: 30px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: Theme.p.windowBg;
+            ti := TextInput {
+                x: 8px;
+                y: 0;
+                width: parent.width - 16px;
+                height: parent.height;
+                // 官方垂直居中：占满行高后按行盒居中，placeholder 与输入文本同一基准
+                vertical-alignment: center;
+                single-line: true;
+                font-size: 13px;
+                color: Theme.p.textPrimary;
+                selection-background-color: Theme.p.accentSoftBg;
+                text <=> root.text;
+            }
+            Text {
+                visible: root.hint != "" && ti.text == "";
+                x: 8px;
+                y: (parent.height - self.height) / 2;
+                text: root.hint;
+                color: Theme.p.textMuted;
+                font-size: 13px;
+            }
+        }
+    }
+}
+
+/// 胶囊/矩形按钮（提供商二选一 / 模型行操作 / 底栏保存取消 / 浮层小按钮）。
+/// 宽度：布局使用方给（缺省随布局拉伸）；需要随文字收拢的行内小按钮写
+/// `width: self.hug-width`（如回收站行按钮）。danger = 红字（彻底删除类）。
+export component Pill inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    in property <length> btn-height: 30px;
+    out property <length> hug-width: t.preferred-width + 16px;
+    callback picked();
+
+    height: root.btn-height;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.selected || root.primary
+            ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
+    background: root.primary ? Theme.p.accent
+            : (root.selected ? Theme.p.accentSoftBg
+            : (ta.has-hover ? Theme.p.listHover : transparent));
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    t := Text {
+        x: 8px;
+        width: parent.width - 16px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.danger ? #e57373 : (root.primary ? white : Theme.p.textPrimary);
+        font-size: 13px;
+        horizontal-alignment: center;
+    }
+}
+
+/// 标签 + 多行输入（角色提示词）：std TextEdit 定高内滚（其 viewport-height 与
+/// height 内置互绑，外部读取成环，故不自适应高度）。1.17 TextEdit 不露出 color
+/// （随 FluentPalette 系统色板，见「已知边界」），提示走 placeholder-text
+export component PromptRow inherits Rectangle {
+    in property <string> label;
+    in-out property <string> text;
+    in property <string> hint;
+
+    height: 124px;
+    VerticalLayout {
+        spacing: 3px;
+        Text {
+            text: root.label;
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            height: 96px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: transparent; // 底色由 TextEdit 自绘，套 theme 色会双层
+            TextEdit {
+                x: 2px;
+                y: 2px;
+                width: parent.width - 4px;
+                height: parent.height - 4px;
+                font-size: 13px;
+                wrap: word-wrap;
+                placeholder-text: root.hint;
+                text <=> root.text;
+            }
+        }
+    }
+}
+
+/// 弹层菜单项（新增提供商类型选择 / 默认模型选择）
+export component MenuOpt inherits Rectangle {
+    in property <string> label;
+    callback picked();
+
+    height: 30px;
+    border-radius: 6px;
+    background: ta.has-hover ? Theme.p.listHover : transparent;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    Text {
+        x: 10px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: Theme.p.textPrimary;
+        font-size: 13px;
+    }
+}
+
+/// 左侧分类导航条目（列表式：选中高亮 + 左侧强调条）
+export component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback picked();
+
+    height: 34px;
+    border-radius: 7px;
+    background: root.selected ? Theme.p.listActive
+            : (ta.has-hover ? Theme.p.listHover : transparent);
+    Rectangle {
+        visible: root.selected;
+        x: 0;
+        width: 3px;
+        y: (parent.height - self.height) / 2;
+        height: 18px;
+        border-radius: 2px;
+        background: Theme.p.accent;
+    }
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.selected ? Theme.p.textPrimary : Theme.p.textSecondary;
+        font-size: 13px;
+    }
+}
+
+/// 左下角图标按钮（侧栏底栏通用：设置/主题/回收站/返回同一形态）
+export component IconButton inherits Rectangle {
+    in property <IconKind> icon;
+    in property <brush> ink: Theme.p.textSecondary;
+    in property <bool> highlighted: false; // 回收站有货态：强调浅底 + 链接色图标
+    callback clicked();
+
+    width: 40px;
+    height: 34px;
+    border-radius: 8px;
+    background: ta.has-hover ? Theme.p.listHover
+            : (root.highlighted ? Theme.p.accentSoftBg : transparent);
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        kind: root.icon;
+        ink: root.highlighted ? Theme.p.link : root.ink;
+    }
+}
+
+/// 圆形头像：有图盖图（cover 裁剪），无图画色板圆底 + 名称首字。
+/// 宽高由使用方定（border-radius 恒为一半）；尺寸变体只改 glyph-size。
+/// （圆底色属性名用 tint：Rectangle 内置 color<=>background 别名不可重声明）
+export component Avatar inherits Rectangle {
+    in property <image> img;
+    in property <color> tint;
+    in property <string> initial;
+    in property <length> glyph-size: 13px;
+
+    width: 28px;
+    height: root.width;
+    border-radius: root.width / 2;
+    clip: true;
+    background: root.tint;
+    if root.img.width > 0 : Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.img;
+        image-fit: cover;
+    }
+    if root.img.width == 0 : Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.initial;
+        color: white;
+        font-size: root.glyph-size;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+/// 列表竖栏一行数据（提供商 / AI 助手两页共用；字段 Rust 注入）：
+/// `sub` = 副行常态文案（厂商标签 / 默认模型摘要）；`activeText` = 选中态副行（● 使用中 / ● 默认）
+export struct RailItem {
+    id: string,
+    name: string,
+    sub: string,
+    active: bool,
+    activeText: string,
+    deleted: bool,
+}
+
+/// 列表竖栏的一行：主行名称、副行状态；编辑中底色、使用中强调、删除灰显
+export component RailRow inherits Rectangle {
+    in property <RailItem> item;
+    in property <bool> current;
+    callback clicked();
+
+    height: 46px;
+    border-radius: 7px;
+    background: root.current ? Theme.p.listActive
+            : (ta.has-hover ? Theme.p.listHover : transparent);
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    VerticalLayout {
+        padding: 8px;
+        spacing: 1px;
+        Text {
+            text: root.item.name;
+            color: root.item.deleted ? Theme.p.textMuted : Theme.p.textPrimary;
+            font-size: 13px;
+            overflow: elide;
+        }
+        Text {
+            text: root.item.deleted ? "已删除"
+                : (root.item.active ? root.item.activeText : root.item.sub);
+            color: root.item.active ? Theme.p.link : Theme.p.textMuted;
+            font-size: 11px;
+            overflow: elide;
+        }
+    }
+}
+
+/// 通用模态：半透明遮罩（点空白关闭）+ 居中卡（标题行 + 关闭钮 + @children 内容）。
+/// 回收站浮层与设置页弹层（远端清单/默认模型）共用；卡尺寸上限由使用方调。
+export component Modal inherits Rectangle {
+    in property <string> title;
+    in property <length> card-max-width: 400px;
+    in property <length> card-max-height: 440px;
+    callback close-requested();
+
+    background: rgba(0, 0, 0, 0.45);
+    // 遮罩先绘于底，卡片在其上；卡内 TouchArea 截获不外泄
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.close-requested(); }
+    }
+    Card {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: Math.min(root.card-max-width, root.width - 60px);
+        height: Math.min(root.card-max-height, root.height - 60px);
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            HorizontalLayout {
+                height: 24px;
+                spacing: 8px;
+                Text {
+                    text: root.title;
+                    color: Theme.p.textPrimary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Pill {
+                    width: 56px;
+                    label: "关闭";
+                    picked => { root.close-requested(); }
+                }
+            }
+            @children
+        }
+    }
+}

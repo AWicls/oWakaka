@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Changed
+- 新增 `ui/controls.slint` 通用控件库并收编重复实现（内部重构，视觉基本无差）：`FieldRow`/`Pill`/`PromptRow`/`MenuOpt`/`NavItem` 自 `settings.slint` 迁入；新增 `IconButton`（侧栏底栏图标钮）、`Avatar`（圆形头像，收编聊天头栏与助手页两份复制）、`Modal`（遮罩+居中卡弹层，回收站/远端模型清单/默认模型三处浮层共用）、`RailItem`+`RailRow`（合并原 `ProvRow`/`AstRow` 两同构 struct 与 `ProvItemRow` 组件）；回收站 `TinyBtn` 并入 `Pill`（高度/宽度参数化）。远端模型清单已收录按钮文案「✓」改「已收录」（默认字体缺字风险横向清扫）
 - UI 三界面（边框/聊天/设置）分级重构第一步：无边框标题栏改版——应用名「oWakaka」左置，栏中央加粗显示当前页名（「聊天」/「设置」，随整页切换）；页名绝对定位横跨整栏、相对窗口真居中（不受右侧最小化/最大化/关闭键组影响），且中央文字不拦截鼠标，拖窗与双击最大化照常
 - 三个「胖入口」文件深度拆分下沉，本体收敛为入口/装配层（纯内部重构，行为与视觉零变化；`cargo fmt`/`clippy`/`test` 全绿）：
   - `db.rs` 249→166 行：表 DDL、时间戳表达式与版本策略（重建 / 补结构例外）下沉 `db/schema.rs`，`NOW`/`SCHEMA_VERSION` 经 `db.rs` 再导出保持子模块 `use super` 路径不变

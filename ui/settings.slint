@@ -2,217 +2,12 @@
 // 数据源：DB 设置 kv + persona 活跃行 + Theme 全局（界面页直改，即时生效）。
 // 由 AppWindow 的 if-block 挂载——每次打开重建实例，表单初值即最新落盘配置。
 
-import { ScrollView, TextEdit } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme, Icon, IconKind, Card } from "theme.slint";
 import { ModelItem } from "input.slint";
-
-/// 标签 + 单行输入框（空值时显示灰色提示）
-component FieldRow inherits Rectangle {
-    in property <string> label;
-    in-out property <string> text;
-    in property <string> hint;
-
-    height: 52px;
-    VerticalLayout {
-        spacing: 3px;
-        Text {
-            text: root.label;
-            color: Theme.p.textMuted;
-            font-size: 12px;
-        }
-        Rectangle {
-            height: 30px;
-            border-radius: 7px;
-            border-width: 1px;
-            border-color: Theme.p.inputBorder;
-            background: Theme.p.windowBg;
-            ti := TextInput {
-                x: 8px;
-                y: 0;
-                width: parent.width - 16px;
-                height: parent.height;
-                // 官方垂直居中：占满行高后按行盒居中，placeholder 与输入文本同一基准
-                vertical-alignment: center;
-                single-line: true;
-                font-size: 13px;
-                color: Theme.p.textPrimary;
-                selection-background-color: Theme.p.accentSoftBg;
-                text <=> root.text;
-            }
-            Text {
-                visible: root.hint != "" && ti.text == "";
-                x: 8px;
-                y: (parent.height - self.height) / 2;
-                text: root.hint;
-                color: Theme.p.textMuted;
-                font-size: 13px;
-            }
-        }
-    }
-}
-
-/// 胶囊选项按钮（提供商二选一 / 底部保存取消）
-component Pill inherits Rectangle {
-    in property <string> label;
-    in property <bool> selected;
-    in property <bool> primary: false;
-    callback picked();
-
-    height: 30px;
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: root.selected || root.primary
-            ? Theme.p.accentSoftBorder : Theme.p.inputBorder;
-    background: root.primary ? Theme.p.accent
-            : (root.selected ? Theme.p.accentSoftBg
-            : (ta.has-hover ? Theme.p.listHover : transparent));
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-    Text {
-        width: parent.width;
-        y: (parent.height - self.height) / 2;
-        text: root.label;
-        color: root.primary ? white : Theme.p.textPrimary;
-        font-size: 13px;
-        horizontal-alignment: center;
-    }
-}
-
-/// 标签 + 多行输入（角色提示词）：std TextEdit 定高内滚（其 viewport-height 与
-/// height 内置互绑，外部读取成环，故不自适应高度）。1.17 TextEdit 不露出 color
-/// （随 FluentPalette 系统色板，见「已知边界」），提示走 placeholder-text
-component PromptRow inherits Rectangle {
-    in property <string> label;
-    in-out property <string> text;
-    in property <string> hint;
-
-    height: 124px;
-    VerticalLayout {
-        spacing: 3px;
-        Text {
-            text: root.label;
-            color: Theme.p.textMuted;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-        Rectangle {
-            height: 96px;
-            border-radius: 7px;
-            border-width: 1px;
-            border-color: Theme.p.inputBorder;
-            background: transparent; // 底色由 TextEdit 自绘，套 theme 色会双层
-            TextEdit {
-                x: 2px;
-                y: 2px;
-                width: parent.width - 4px;
-                height: parent.height - 4px;
-                font-size: 13px;
-                wrap: word-wrap;
-                placeholder-text: root.hint;
-                text <=> root.text;
-            }
-        }
-    }
-}
-
-/// 提供商/助手列表项（列表竖栏）：主行名称、副行状态；编辑中底色、使用中强调、删除灰显
-component ProvItemRow inherits Rectangle {
-    in property <string> name;
-    in property <string> kind;
-    in property <bool> active;
-    in property <string> active-label: "● 使用中"; // active 时副行文案（助手页传「● 默认」）
-    in property <bool> deleted;
-    in property <bool> current;
-    callback clicked();
-
-    height: 46px;
-    border-radius: 7px;
-    background: root.current ? Theme.p.listActive
-            : (ta.has-hover ? Theme.p.listHover : transparent);
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-    VerticalLayout {
-        padding: 8px;
-        spacing: 1px;
-        Text {
-            text: root.name;
-            color: root.deleted ? Theme.p.textMuted : Theme.p.textPrimary;
-            font-size: 13px;
-            overflow: elide;
-        }
-        Text {
-            text: root.deleted ? "已删除" : (root.active ? root.active-label : root.kind);
-            color: root.active ? Theme.p.link : Theme.p.textMuted;
-            font-size: 11px;
-            overflow: elide;
-        }
-    }
-}
-
-/// 弹层菜单项（新增提供商类型选择）
-component MenuOpt inherits Rectangle {
-    in property <string> label;
-    callback picked();
-
-    height: 30px;
-    border-radius: 6px;
-    background: ta.has-hover ? Theme.p.listHover : transparent;
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-    Text {
-        x: 10px;
-        y: (parent.height - self.height) / 2;
-        text: root.label;
-        color: Theme.p.textPrimary;
-        font-size: 13px;
-    }
-}
-
-/// 左侧分类导航条目（列表式：选中高亮 + 左侧强调条）
-component NavItem inherits Rectangle {
-    in property <string> label;
-    in property <bool> selected;
-    callback picked();
-
-    height: 34px;
-    border-radius: 7px;
-    background: root.selected ? Theme.p.listActive
-            : (ta.has-hover ? Theme.p.listHover : transparent);
-    Rectangle {
-        visible: root.selected;
-        x: 0;
-        width: 3px;
-        y: (parent.height - self.height) / 2;
-        height: 18px;
-        border-radius: 2px;
-        background: Theme.p.accent;
-    }
-    ta := TouchArea {
-        width: parent.width;
-        height: parent.height;
-        mouse-cursor: pointer;
-        clicked => { root.picked(); }
-    }
-    Text {
-        x: 12px;
-        y: (parent.height - self.height) / 2;
-        text: root.label;
-        color: root.selected ? Theme.p.textPrimary : Theme.p.textSecondary;
-        font-size: 13px;
-    }
-}
+import {
+    Avatar, FieldRow, Pill, PromptRow, MenuOpt, NavItem, RailItem, RailRow, Modal,
+} from "controls.slint";
 
 /// 返回钮（导航卡顶部，与「设置」标题并排）：左箭头 + 文字，可被外层布局定宽
 component BackButton inherits Rectangle {
@@ -251,24 +46,6 @@ component BackButton inherits Rectangle {
             vertical-alignment: center;
         }
     }
-}
-
-/// 提供商清单项（列表竖栏数据，Rust 注入）
-export struct ProvRow {
-    id: string,
-    name: string,
-    kind: string,       // 厂商标签（展示用）
-    active: bool,       // 使用中
-    deleted: bool,      // 逻辑删除（灰显）
-}
-
-/// 助手清单项（AI 助手页列表竖栏数据，Rust 注入；复用 ProvItemRow 展示）
-export struct AstRow {
-    id: string,         // persona 行 id 字符串化
-    name: string,
-    sub: string,        // 副行：默认模型摘要（无则占位文案）
-    active: bool,       // 默认助手
-    deleted: bool,      // 逻辑删除（灰显）
 }
 
 /// 模型管理行：当前提供商已配置的模型（含能力位）
@@ -442,7 +219,7 @@ component ModelCard inherits Rectangle {
 /// 各分区页是 if-block 实例，切页销毁重建。
 export component SettingsPage inherits Rectangle {
     // —— 提供商页（Rust 注入/回注；密钥框恒注空，提交空 = 不改已存） ——
-    in property <[ProvRow]> provs;
+    in property <[RailItem]> provs;
     in-out property <string> prov-sel;      // 正在编辑的条目 id（空 = 无可用）
     in-out property <string> prov-name;
     in-out property <string> prov-base;
@@ -475,7 +252,7 @@ export component SettingsPage inherits Rectangle {
     callback prov-tested();                 // 测试连通（用表单当前值）
 
     // —— AI 助手页（多助手；Rust 注入/回注，表单存页面级 ed 态，「完成」写回） ——
-    in property <[AstRow]> asts;
+    in property <[RailItem]> asts;
     in-out property <string> ast-sel;       // 正在编辑的助手 id（空 = 无选中）
     in-out property <string> ast-name;
     in-out property <string> ast-prompt;    // 系统提示词（空 = 不注入）
@@ -588,11 +365,8 @@ export component SettingsPage inherits Rectangle {
                             label: "＋ 新增";
                             picked => { root.add-menu = true; }
                         }
-                        for pr in root.provs : ProvItemRow {
-                            name: pr.name;
-                            kind: pr.kind;
-                            active: pr.active;
-                            deleted: pr.deleted;
+                        for pr in root.provs : RailRow {
+                            item: pr;
                             current: pr.id == root.prov-sel;
                             clicked => {
                                 root.prov-selected(pr.id);
@@ -943,12 +717,8 @@ export component SettingsPage inherits Rectangle {
                             label: "＋ 新增";
                             picked => { root.ast-created(); }
                         }
-                        for a in root.asts : ProvItemRow {
-                            name: a.name;
-                            kind: a.sub;
-                            active: a.active;
-                            active-label: "● 默认";
-                            deleted: a.deleted;
+                        for a in root.asts : RailRow {
+                            item: a;
                             current: a.id == root.ast-sel;
                             clicked => {
                                 root.ast-selected(a.id);
@@ -991,27 +761,13 @@ export component SettingsPage inherits Rectangle {
                                 if root.ast-sel != "" : HorizontalLayout {
                                     spacing: 10px;
                                     height: 52px;
-                                    Rectangle {
+                                    Avatar {
                                         width: 48px;
                                         height: 48px;
-                                        border-radius: 24px;
-                                        clip: true;
-                                        background: root.ast-avatar-color;
-                                        if root.ast-avatar-img.width > 0 : Image {
-                                            width: 48px;
-                                            height: 48px;
-                                            source: root.ast-avatar-img;
-                                            image-fit: cover;
-                                        }
-                                        if root.ast-avatar-img.width == 0 : Text {
-                                            width: 48px;
-                                            height: 48px;
-                                            text: root.ast-initial;
-                                            color: white;
-                                            font-size: 20px;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
+                                        glyph-size: 20px;
+                                        img: root.ast-avatar-img;
+                                        tint: root.ast-avatar-color;
+                                        initial: root.ast-initial;
                                     }
                                     VerticalLayout {
                                         horizontal-stretch: 1;
@@ -1227,90 +983,60 @@ export component SettingsPage inherits Rectangle {
         }
     }
 
-    // —— 远端模型清单弹层：居中自适应（＋收录；已收录 ✓ 灰显，遮罩关闭） ——
-    if root.remote-open : Rectangle {
+    // —— 远端模型清单弹层：居中自适应（＋收录；已收录灰显，遮罩关闭） ——
+    if root.remote-open : Modal {
         x: 0;
         y: 0;
         width: root.width;
         height: root.height;
-        TouchArea {
-            clicked => { root.remote-open = false; }
+        title: "远端模型清单";
+        card-max-width: 360px;
+        close-requested => { root.remote-open = false; }
+
+        if root.remote-loading : Text {
+            text: "拉取中…（改地址/密钥后请重开设置再拉）";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
         }
-    }
-    if root.remote-open : Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: Math.min(360px, root.width - 60px);
-        height: Math.min(440px, root.height - 60px);
-        border-radius: 10px;
-        border-width: 1px;
-        border-color: Theme.p.inputBorder;
-        background: Theme.p.panelBg;
-        clip: true;
-        VerticalLayout {
-            padding: 10px;
-            spacing: 6px;
-            HorizontalLayout {
-                height: 24px;
-                spacing: 8px;
-                Text {
-                    text: "远端模型清单";
-                    color: Theme.p.textPrimary;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                }
-                Rectangle { horizontal-stretch: 1; }
-                Pill {
-                    width: 56px;
-                    label: "关闭";
-                    picked => { root.remote-open = false; }
-                }
-            }
-            if root.remote-loading : Text {
-                text: "拉取中…（改地址/密钥后请重开设置再拉）";
-                color: Theme.p.textMuted;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            if !root.remote-loading && root.remote-models.length == 0 : Text {
-                text: "暂无清单：点「拉取远端」按当前表单的端点与密钥请求 /models。";
-                color: Theme.p.textMuted;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            Rectangle {
-                vertical-stretch: 1;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: Theme.p.inputBorder;
-                background: Theme.p.windowBg;
-                clip: true;
-                ScrollView {
-                    width: parent.width;
-                    height: parent.height;
-                    viewport-width: self.visible-width;
-                    vertical-scrollbar-policy: always-on;
-                    VerticalLayout {
-                        padding: 4px;
-                        spacing: 2px;
-                        for r in root.remote-models : HorizontalLayout {
-                            height: 26px;
-                            spacing: 6px;
-                            Text {
-                                text: r.id;
-                                horizontal-stretch: 1;
-                                color: r.added ? Theme.p.textMuted : Theme.p.textPrimary;
-                                font-size: 12px;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-                            Pill {
-                                width: 44px;
-                                label: r.added ? "✓" : "＋";
-                                selected: !r.added;
-                                picked => {
-                                    if !r.added { root.prov-model-added(r.id); }
-                                }
+        if !root.remote-loading && root.remote-models.length == 0 : Text {
+            text: "暂无清单：点「拉取远端」按当前表单的端点与密钥请求 /models。";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: Theme.p.windowBg;
+            clip: true;
+            ScrollView {
+                width: parent.width;
+                height: parent.height;
+                viewport-width: self.visible-width;
+                vertical-scrollbar-policy: always-on;
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+                    for r in root.remote-models : HorizontalLayout {
+                        height: 26px;
+                        spacing: 6px;
+                        Text {
+                            text: r.id;
+                            horizontal-stretch: 1;
+                            color: r.added ? Theme.p.textMuted : Theme.p.textPrimary;
+                            font-size: 12px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        Pill {
+                            width: 44px;
+                            label: r.added ? "已收录" : "＋";
+                            selected: !r.added;
+                            picked => {
+                                if !r.added { root.prov-model-added(r.id); }
                             }
                         }
                     }
@@ -1320,78 +1046,49 @@ export component SettingsPage inherits Rectangle {
     }
 
     // —— 默认模型选择弹层：居中自适应（数据源 = 当前激活提供商模型清单，含「不指定」） ——
-    if root.ast-model-open : Rectangle {
+    if root.ast-model-open : Modal {
         x: 0;
         y: 0;
         width: root.width;
         height: root.height;
-        TouchArea {
-            clicked => { root.ast-model-open = false; }
+        title: "默认模型";
+        card-max-width: 320px;
+        card-max-height: 360px;
+        close-requested => { root.ast-model-open = false; }
+
+        if root.ast-models.length == 0 : Text {
+            text: "当前提供商还没有登记模型：先去提供商页添加。";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+            wrap: word-wrap;
         }
-    }
-    if root.ast-model-open : Rectangle {
-        x: (root.width - self.width) / 2;
-        y: (root.height - self.height) / 2;
-        width: Math.min(320px, root.width - 60px);
-        height: Math.min(360px, root.height - 60px);
-        border-radius: 10px;
-        border-width: 1px;
-        border-color: Theme.p.inputBorder;
-        background: Theme.p.panelBg;
-        clip: true;
-        VerticalLayout {
-            padding: 10px;
-            spacing: 6px;
-            HorizontalLayout {
-                height: 24px;
-                spacing: 8px;
-                Text {
-                    text: "默认模型";
-                    color: Theme.p.textPrimary;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                }
-                Rectangle { horizontal-stretch: 1; }
-                Pill {
-                    width: 56px;
-                    label: "关闭";
-                    picked => { root.ast-model-open = false; }
-                }
-            }
-            if root.ast-models.length == 0 : Text {
-                text: "当前提供商还没有登记模型：先去提供商页添加。";
-                color: Theme.p.textMuted;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            Rectangle {
-                vertical-stretch: 1;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: Theme.p.inputBorder;
-                background: Theme.p.windowBg;
-                clip: true;
-                ScrollView {
-                    width: parent.width;
-                    height: parent.height;
-                    viewport-width: self.visible-width;
-                    vertical-scrollbar-policy: always-on;
-                    VerticalLayout {
-                        padding: 4px;
-                        spacing: 2px;
-                        MenuOpt {
-                            label: "不指定";
-                            picked => {
-                                root.ast-model = "";
-                                root.ast-model-open = false;
-                            }
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.p.inputBorder;
+            background: Theme.p.windowBg;
+            clip: true;
+            ScrollView {
+                width: parent.width;
+                height: parent.height;
+                viewport-width: self.visible-width;
+                vertical-scrollbar-policy: always-on;
+                VerticalLayout {
+                    padding: 4px;
+                    spacing: 2px;
+                    MenuOpt {
+                        label: "不指定";
+                        picked => {
+                            root.ast-model = "";
+                            root.ast-model-open = false;
                         }
-                        for m in root.ast-models : MenuOpt {
-                            label: m.display;
-                            picked => {
-                                root.ast-model = m.id;
-                                root.ast-model-open = false;
-                            }
+                    }
+                    for m in root.ast-models : MenuOpt {
+                        label: m.display;
+                        picked => {
+                            root.ast-model = m.id;
+                            root.ast-model-open = false;
                         }
                     }
                 }

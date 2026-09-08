@@ -14,7 +14,7 @@ use crate::ai::{
 use crate::db::Db;
 use slint::{ComponentHandle, SharedString, VecModel};
 
-use super::{AppWindow, ModelRow, ProvRow, RemoteRow};
+use super::{AppWindow, ModelRow, RailItem, RemoteRow};
 
 /// 表单 api 序号 ↔ 枚举（0 chat | 1 responses）
 fn api_of(i: i32) -> Api {
@@ -32,14 +32,15 @@ fn api_to_i(api: Api) -> i32 {
 /// 密钥框恒注空串（不回显明文；提交空 = 保持已存密钥不变）。
 pub(super) fn prov_inject(db: &Db, window: &AppWindow, select: &str) {
     let ps = Providers::load(db).unwrap_or_default();
-    let rows: Vec<ProvRow> = ps
+    let rows: Vec<RailItem> = ps
         .list
         .iter()
-        .map(|e| ProvRow {
+        .map(|e| RailItem {
             id: e.id.as_str().into(),
             name: e.name.as_str().into(),
-            kind: e.kind.display_name().into(),
+            sub: e.kind.display_name().into(),
             active: e.id == ps.active,
+            activeText: "● 使用中".into(),
             deleted: e.deleted,
         })
         .collect();

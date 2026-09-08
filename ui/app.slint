@@ -10,12 +10,13 @@ import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
 import { InputArea, ModelItem } from "input.slint";
-import { SettingsPage, ProvRow, ModelRow, RemoteRow, AstRow } from "settings.slint";
+import { SettingsPage, ModelRow, RemoteRow } from "settings.slint";
 import { CaptionBar } from "caption.slint";
 import { TrashOverlay, TrashItem } from "trash.slint";
+import { RailItem, Avatar } from "controls.slint";
 
-// 再导出供 Rust（include_modules）消费的 struct（TrashItem 定义见 trash.slint）
-export { ChatMessage, SessionItem, ModelItem, ProvRow, ModelRow, RemoteRow, AstRow, TrashItem }
+// 再导出供 Rust（include_modules）消费的 struct（TrashItem 定义见 trash.slint，RailItem 见 controls.slint）
+export { ChatMessage, SessionItem, ModelItem, RailItem, ModelRow, RemoteRow, TrashItem }
 
 export component AppWindow inherits Window {
     title: "oWakaka";
@@ -51,7 +52,7 @@ export component AppWindow inherits Window {
 
     changed ui-theme => { root.theme-changed(root.ui-theme); }
     // —— 提供商页状态（providers 整包视图；Rust 注入/回注，密钥不下 UI） ——
-    in property <[ProvRow]> provs;
+    in property <[RailItem]> provs;
     in-out property <string> prov-sel;
     in-out property <string> prov-name;
     in-out property <string> prov-base;
@@ -83,7 +84,7 @@ export component AppWindow inherits Window {
     callback prov-purged();
     callback prov-tested();
     // —— AI 助手页状态（多助手 CRUD；Rust 注入/回注，「完成」写回） ——
-    in property <[AstRow]> asts;
+    in property <[RailItem]> asts;
     in-out property <string> ast-sel;
     in-out property <string> ast-name;
     in-out property <string> ast-prompt;
@@ -184,28 +185,12 @@ export component AppWindow inherits Window {
                     // 布局不垂直居中定高元素：外套吃满行高的 Rectangle，圆内自居中
                     Rectangle {
                         width: 28px;
-                        Rectangle {
+                        Avatar {
                             y: (parent.height - self.height) / 2;
                             width: 28px;
-                            height: 28px;
-                            border-radius: 14px;
-                            clip: true;
-                            background: root.chat-ast-color;
-                            if root.chat-ast-img.width > 0 : Image {
-                                width: 28px;
-                                height: 28px;
-                                source: root.chat-ast-img;
-                                image-fit: cover;
-                            }
-                            if root.chat-ast-img.width == 0 : Text {
-                                width: 28px;
-                                height: 28px;
-                                text: root.chat-ast-initial;
-                                color: white;
-                                font-size: 13px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                            img: root.chat-ast-img;
+                            tint: root.chat-ast-color;
+                            initial: root.chat-ast-initial;
                         }
                     }
                     Text {

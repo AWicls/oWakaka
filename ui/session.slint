@@ -3,6 +3,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme, Icon, IconKind, OptionRow } from "theme.slint";
+import { IconButton } from "controls.slint";
 
 /// 侧栏一行数据源：会话标题 + 是否选中。
 export struct SessionItem {
@@ -120,46 +121,14 @@ export component SessionSidebar inherits Rectangle {
         bottom-row := HorizontalLayout {
             spacing: 4px;
             height: 34px;
-            Rectangle {
-                width: 40px;
-                height: 34px;
-                border-radius: 8px;
-                background: stb.has-hover ? Theme.p.listHover : transparent;
-                stb := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    mouse-cursor: pointer;
-                    clicked => { root.settings-clicked(); }
-                }
-                Icon {
-                    x: 12px;
-                    y: (parent.height - self.height) / 2;
-                    width: 16px;
-                    height: 16px;
-                    kind: IconKind.sliders;
-                    ink: Theme.p.textSecondary;
-                }
+            IconButton {
+                icon: IconKind.sliders;
+                clicked => { root.settings-clicked(); }
             }
-            theme-btn := Rectangle {
-                width: 40px;
-                height: 34px;
-                border-radius: 8px;
-                background: tb.has-hover ? Theme.p.listHover : transparent;
-                tb := TouchArea {
-                    width: parent.width;
-                    height: parent.height;
-                    mouse-cursor: pointer;
-                    clicked => { root.menu-open = !root.menu-open; }
-                }
-                Icon {
-                    x: 12px;
-                    y: (parent.height - self.height) / 2;
-                    width: 16px;
-                    height: 16px;
-                    kind: Theme.mode == 0 ? IconKind.sun
-                        : Theme.mode == 1 ? IconKind.moon : IconKind.monitor;
-                    ink: Theme.p.textSecondary;
-                }
+            theme-btn := IconButton {
+                icon: Theme.mode == 0 ? IconKind.sun
+                    : Theme.mode == 1 ? IconKind.moon : IconKind.monitor;
+                clicked => { root.menu-open = !root.menu-open; }
             }
             // 回收站入口（垃圾桶图元；有删剩会话时右侧显计数并高亮）
             Rectangle {

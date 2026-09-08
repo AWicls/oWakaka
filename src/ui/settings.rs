@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::db::Db;
 use slint::{Color, ComponentHandle, Image, SharedString, VecModel};
 
-use super::{AppWindow, AstRow};
+use super::{AppWindow, RailItem};
 
 /// 温度文本 → `Option<f64>`：空 = 未设定（不发字段）；非数字或越界 0–2 回 `Err` 文案。
 fn parse_temperature(s: &str) -> Result<Option<f64>, String> {
@@ -63,9 +63,9 @@ pub(super) fn load_avatar(path: &str) -> Image {
 /// 重注入助手列表与详情。select 为空 = 维持当前选中；选中失效回落默认助手。
 pub(super) fn ast_inject(db: &Db, window: &AppWindow, select: &str) {
     let list = db.assistants().unwrap_or_default();
-    let rows: Vec<AstRow> = list
+    let rows: Vec<RailItem> = list
         .iter()
-        .map(|a| AstRow {
+        .map(|a| RailItem {
             id: a.id.to_string().into(),
             name: a.name.as_str().into(),
             sub: (if a.model.is_empty() {
@@ -75,6 +75,7 @@ pub(super) fn ast_inject(db: &Db, window: &AppWindow, select: &str) {
             })
             .into(),
             active: a.is_default,
+            activeText: "● 默认".into(),
             deleted: a.deleted,
         })
         .collect();
