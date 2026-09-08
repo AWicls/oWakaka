@@ -39,7 +39,7 @@ argument-hint: "描述你想推进的功能或阶段，如：实现对话界面�
 2. **每个改动一个 commit**：细粒度提交，Conventional Commits + 中文描述（`feat: 新增会话列表`）。
 3. **Changelog 随改动记**：用户可感知的改动追加到 `CHANGELOG.md` 的 `[Unreleased]`，格式遵循 Keep a Changelog 1.1.0 中文版。
 4. **SemVer tag**：`vX.Y.Z`，feat→minor / fix→patch / breaking→major；只在用户验收节点打，你只建议版本号。
-5. main 单分支，禁止 `--force`、`--no-verify`。
+5. dev 为主开发分支，main 只收验收过的稳定版（验收后 dev→main 合并再打 tag），禁止 `--force`、`--no-verify`。
 
 ## 对齐纪律
 
