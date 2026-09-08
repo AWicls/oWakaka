@@ -1,0 +1,120 @@
+// 回收站浮层（会话两级删除的找回入口）：半透明遮罩 + 居中卡（恢复 / 彻底删除）。
+// 遮罩只盖内容区——定位（y=caption-height 之下、铺满 content 区）由使用方 AppWindow 绑定，
+// 组件内一律以自身 root.width/height 计。点遮罩关闭，卡片按钮在上层不冒泡。
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Card } from "theme.slint";
+
+/// 回收站一行（逻辑删除的会话）
+export struct TrashItem {
+    id: int,
+    title: string,
+}
+
+/// 回收站浮层里的小文字按钮
+component TinyBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback picked();
+
+    width: t.preferred-width + 14px;
+    height: 22px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.p.inputBorder;
+    background: ta.has-hover ? Theme.p.listHover : transparent;
+    ta := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+    t := Text {
+        x: 7px;
+        y: (parent.height - self.height) / 2;
+        text: root.label;
+        color: root.danger ? #e57373 : Theme.p.link;
+        font-size: 12px;
+    }
+}
+
+/// 回收站浮层：遮罩（点击关闭）+ 居中卡（恢复 / 彻底删除）
+export component TrashOverlay inherits Rectangle {
+    in property <[TrashItem]> items;
+    callback close-overlay();
+    callback restore(int);
+    callback purge(int);
+
+    background: rgba(0, 0, 0, 0.45);
+    // 遮罩：铺满浮层区，点空白关闭。先绘于底，卡片在其上
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.close-overlay(); }
+    }
+    Card {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: Math.min(400px, root.width - 60px);
+        height: Math.min(420px, root.height - 40px);
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            HorizontalLayout {
+                height: 24px;
+                spacing: 8px;
+                Text {
+                    text: "回收站";
+                    color: Theme.p.textPrimary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                TinyBtn {
+                    label: "关闭";
+                    picked => { root.close-overlay(); }
+                }
+            }
+            if root.items.length == 0 : Text {
+                text: "没有已删除的会话。侧栏条目悬停后点行右侧的叉号，删掉的会话会先进这里。";
+                color: Theme.p.textMuted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            ScrollView {
+                vertical-stretch: 1;
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                VerticalLayout {
+                    spacing: 4px;
+                    for t in root.items : HorizontalLayout {
+                        height: 28px;
+                        spacing: 8px;
+                        Text {
+                            text: t.title;
+                            horizontal-stretch: 1;
+                            color: Theme.p.textSecondary;
+                            font-size: 13px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        TinyBtn {
+                            label: "恢复";
+                            picked => { root.restore(t.id); }
+                        }
+                        TinyBtn {
+                            label: "彻底删除";
+                            danger: true;
+                            picked => { root.purge(t.id); }
+                        }
+                    }
+                }
+            }
+            Text {
+                text: "恢复 = 放回侧栏末尾；彻底删除连同全部消息物理清除，不可找回。";
+                color: Theme.p.textMuted;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
