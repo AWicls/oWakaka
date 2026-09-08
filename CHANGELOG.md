@@ -8,6 +8,7 @@
 ## [Unreleased]
 
 ### Changed
+- 设置域 Slint 文件按页拆分（内部重构，行为等价）：原 1401 行 `settings.slint` → `settings.slint`（导航卡 44 行）+ `settings_prov.slint`（LLM 提供商页 + 模型管理 670 行）+ `settings_ast.slint`（AI 助手页 306 行）+ `settings_basic.slint`（界面设定/用户设定 95 行）；**删除 `SettingsPage` 中间透传层**——app.slint 设置块直挂页面组件（单层接线），页切换状态/用户人设编辑态收归装配层局部。远端模型/默认模型弹层随所属页面挂本页区域（遮罩不再盖导航栏）
 - 设置页导航改版：四个大类更名并重排为「界面设定 / LLM 提供商 / 用户设定 / AI 助手设定」；返回钮从导航卡顶部（箭头+「返回」文字+「设置」标题行）改为**竖栏左下角纯图标**（与聊天侧栏底栏 IconButton 同形态），卡内「设置」标题撤除（页名已由标题栏中央承担）
 - 新增 `ui/controls.slint` 通用控件库并收编重复实现（内部重构，视觉基本无差）：`FieldRow`/`Pill`/`PromptRow`/`MenuOpt`/`NavItem` 自 `settings.slint` 迁入；新增 `IconButton`（侧栏底栏图标钮）、`Avatar`（圆形头像，收编聊天头栏与助手页两份复制）、`Modal`（遮罩+居中卡弹层，回收站/远端模型清单/默认模型三处浮层共用）、`RailItem`+`RailRow`（合并原 `ProvRow`/`AstRow` 两同构 struct 与 `ProvItemRow` 组件）；回收站 `TinyBtn` 并入 `Pill`（高度/宽度参数化）。远端模型清单已收录按钮文案「✓」改「已收录」（默认字体缺字风险横向清扫）
 - UI 三界面（边框/聊天/设置）分级重构第一步：无边框标题栏改版——应用名「oWakaka」左置，栏中央加粗显示当前页名（「聊天」/「设置」，随整页切换）；页名绝对定位横跨整栏、相对窗口真居中（不受右侧最小化/最大化/关闭键组影响），且中央文字不拦截鼠标，拖窗与双击最大化照常

@@ -1,0 +1,95 @@
+// 设置域两小页：界面设定（主题三态，直改 Theme 全局即时生效）+ 用户设定（用户人设）。
+// 装配（页切换、状态行、保存按钮行）见 app.slint 设置块。
+
+import { Theme, Card } from "theme.slint";
+import { Pill, PromptRow } from "controls.slint";
+
+/// 界面设定页：主题即时生效（与侧栏主题菜单同源），持久化由宿主接线落库
+export component ThemePage inherits Card {
+    VerticalLayout {
+        padding: 18px;
+        spacing: 10px;
+
+        Text {
+            text: "界面设定";
+            color: Theme.p.textPrimary;
+            font-size: 14px;
+        }
+
+        Text {
+            text: "主题";
+            color: Theme.p.textMuted;
+            font-size: 12px;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            height: 30px;
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            Pill {
+                width: 110px;
+                label: "浅色";
+                selected: Theme.mode == 0;
+                picked => { Theme.mode = 0; }
+            }
+
+            Pill {
+                width: 110px;
+                label: "深色";
+                selected: Theme.mode == 1;
+                picked => { Theme.mode = 1; }
+            }
+
+            Pill {
+                width: 130px;
+                label: "跟随系统";
+                selected: Theme.mode == 2;
+                picked => { Theme.mode = 2; }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        Text {
+            text: "主题即时生效（与侧栏主题菜单同源），自动持久化，重启保留";
+            color: Theme.p.textMuted;
+            font-size: 11px;
+            wrap: word-wrap;
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}
+
+/// 用户设定页：编辑态由宿主装配层持有（切页不丢），保存按钮在宿主底栏
+export component UserPage inherits Card {
+    in-out property <string> persona;
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 10px;
+
+        Text {
+            text: "用户设定";
+            color: Theme.p.textPrimary;
+            font-size: 14px;
+        }
+
+        PromptRow {
+            label: "用户人设（并入 system 消息的【用户人设】段，可留空）";
+            text <=> root.persona;
+            hint: "例如：资深 Rust 工程师，关注架构与成本";
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}

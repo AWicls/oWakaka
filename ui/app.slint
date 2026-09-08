@@ -10,10 +10,13 @@ import { VSplitter, HSplitter } from "splitter.slint";
 import { ChatMessage, Bubble } from "bubble.slint";
 import { SessionSidebar, SessionItem } from "session.slint";
 import { InputArea, ModelItem } from "input.slint";
-import { SettingsPage, ModelRow, RemoteRow } from "settings.slint";
+import { SettingsNav } from "settings.slint";
+import { ProvPage, ModelRow, RemoteRow } from "settings_prov.slint";
+import { AstPage } from "settings_ast.slint";
+import { ThemePage, UserPage } from "settings_basic.slint";
 import { CaptionBar } from "caption.slint";
 import { TrashOverlay, TrashItem } from "trash.slint";
-import { RailItem, Avatar } from "controls.slint";
+import { RailItem, Avatar, Pill } from "controls.slint";
 
 // 再导出供 Rust（include_modules）消费的 struct（TrashItem 定义见 trash.slint，RailItem 见 controls.slint）
 export { ChatMessage, SessionItem, ModelItem, RailItem, ModelRow, RemoteRow, TrashItem }
@@ -282,70 +285,126 @@ export component AppWindow inherits Window {
         purge(i) => { root.trash-purge(i); }
     }
 
-    // —— 设置整页：与主三框互斥切换，进入即重建；提供商页双向链到本窗口属性 ——
-    if root.settings-page : SettingsPage {
+    // —— 设置整页：与主三框互斥切换；进入即重建（tab/人设编辑态回初值），
+    // 页面组件属性直连本窗口（单层接线，无中间透传层） ——
+    if root.settings-page : settings-vl := VerticalLayout {
         x: 0;
         y: root.caption-height;
         width: root.width;
         height: root.content-height;
-        provs: root.provs;
-        prov-sel <=> root.prov-sel;
-        prov-name <=> root.prov-name;
-        prov-base <=> root.prov-base;
-        prov-suffix <=> root.prov-suffix;
-        prov-key <=> root.prov-key;
-        prov-api <=> root.prov-api;
-        sel-kind: root.sel-kind;
-        sel-locked: root.sel-locked;
-        sel-active: root.sel-active;
-        sel-deleted: root.sel-deleted;
-        prov-status: root.prov-status;
-        prov-models: root.prov-models;
-        remote-models: root.remote-models;
-        remote-loading: root.remote-loading;
-        prov-fetch => { root.prov-fetch(); }
-        prov-model-added(id) => { root.prov-model-added(id); }
-        prov-model-custom(id, alias) => { root.prov-model-custom(id, alias); }
-        prov-model-alias(id, alias) => { root.prov-model-alias(id, alias); }
-        prov-model-commit(id) => { root.prov-model-commit(id); }
-        prov-model-cap(id, cap, on) => { root.prov-model-cap(id, cap, on); }
-        prov-model-removed(id) => { root.prov-model-removed(id); }
-        prov-created(k) => { root.prov-created(k); }
-        prov-selected(id) => { root.prov-selected(id); }
-        prov-used => { root.prov-used(); }
-        prov-saved => { root.prov-saved(); }
-        prov-deleted => { root.prov-deleted(); }
-        prov-restored => { root.prov-restored(); }
-        prov-purged => { root.prov-purged(); }
-        prov-tested => { root.prov-tested(); }
-        asts: root.asts;
-        ast-sel <=> root.ast-sel;
-        ast-name <=> root.ast-name;
-        ast-prompt <=> root.ast-prompt;
-        ast-temp <=> root.ast-temp;
-        ast-opening <=> root.ast-opening;
-        ast-model <=> root.ast-model;
-        ast-avatar: root.ast-avatar;
-        ast-avatar-img: root.ast-avatar-img;
-        ast-avatar-color: root.ast-avatar-color;
-        ast-initial: root.ast-initial;
-        sel-ast-default: root.sel-ast-default;
-        sel-ast-deleted: root.sel-ast-deleted;
-        ast-status: root.ast-status;
-        ast-models: root.models;
-        ast-created => { root.ast-created(); }
-        ast-selected(id) => { root.ast-selected(id); }
-        ast-saved => { root.ast-saved(); }
-        ast-deleted => { root.ast-deleted(); }
-        ast-restored => { root.ast-restored(); }
-        ast-purged => { root.ast-purged(); }
-        ast-defaulted => { root.ast-defaulted(); }
-        ast-avatar-picked => { root.ast-avatar-picked(); }
-        ast-avatar-cleared => { root.ast-avatar-cleared(); }
-        init-user-persona: root.cfg-user-persona;
-        status: root.cfg-status;
-        saved(persona) => { root.settings-saved(persona); }
-        back => { root.settings-back(); }
+        padding: 14px;
+        spacing: 12px;
+        // 当前分区页 + 用户人设编辑态（跨页存续，初值 = 注入的落盘配置）
+        property <int> tab: 0;
+        property <string> ed-persona: root.cfg-user-persona;
+
+        HorizontalLayout {
+            spacing: 10px;
+            vertical-stretch: 1;
+
+            SettingsNav {
+                width: Math.max(104px, Math.min(150px, root.width * 0.14));
+                page: settings-vl.tab;
+                page-picked(n) => { settings-vl.tab = n; }
+                back => { root.settings-back(); }
+            }
+
+            if settings-vl.tab == 0 : ThemePage {
+                horizontal-stretch: 1;
+            }
+
+            if settings-vl.tab == 1 : ProvPage {
+                horizontal-stretch: 1;
+                win-width: root.width;
+                provs: root.provs;
+                prov-sel <=> root.prov-sel;
+                prov-name <=> root.prov-name;
+                prov-base <=> root.prov-base;
+                prov-suffix <=> root.prov-suffix;
+                prov-key <=> root.prov-key;
+                prov-api <=> root.prov-api;
+                sel-kind: root.sel-kind;
+                sel-locked: root.sel-locked;
+                sel-active: root.sel-active;
+                sel-deleted: root.sel-deleted;
+                prov-status: root.prov-status;
+                prov-models: root.prov-models;
+                remote-models: root.remote-models;
+                remote-loading: root.remote-loading;
+                prov-fetch => { root.prov-fetch(); }
+                prov-model-added(id) => { root.prov-model-added(id); }
+                prov-model-custom(id, alias) => { root.prov-model-custom(id, alias); }
+                prov-model-alias(id, alias) => { root.prov-model-alias(id, alias); }
+                prov-model-commit(id) => { root.prov-model-commit(id); }
+                prov-model-cap(id, cap, on) => { root.prov-model-cap(id, cap, on); }
+                prov-model-removed(id) => { root.prov-model-removed(id); }
+                prov-created(k) => { root.prov-created(k); }
+                prov-selected(id) => { root.prov-selected(id); }
+                prov-used => { root.prov-used(); }
+                prov-saved => { root.prov-saved(); }
+                prov-deleted => { root.prov-deleted(); }
+                prov-restored => { root.prov-restored(); }
+                prov-purged => { root.prov-purged(); }
+                prov-tested => { root.prov-tested(); }
+            }
+
+            if settings-vl.tab == 2 : UserPage {
+                horizontal-stretch: 1;
+                persona <=> settings-vl.ed-persona;
+            }
+
+            if settings-vl.tab == 3 : AstPage {
+                horizontal-stretch: 1;
+                win-width: root.width;
+                asts: root.asts;
+                ast-sel <=> root.ast-sel;
+                ast-name <=> root.ast-name;
+                ast-prompt <=> root.ast-prompt;
+                ast-temp <=> root.ast-temp;
+                ast-opening <=> root.ast-opening;
+                ast-model <=> root.ast-model;
+                ast-avatar: root.ast-avatar;
+                ast-avatar-img: root.ast-avatar-img;
+                ast-avatar-color: root.ast-avatar-color;
+                ast-initial: root.ast-initial;
+                sel-ast-default: root.sel-ast-default;
+                sel-ast-deleted: root.sel-ast-deleted;
+                ast-status: root.ast-status;
+                ast-models: root.models;
+                ast-created => { root.ast-created(); }
+                ast-selected(id) => { root.ast-selected(id); }
+                ast-saved => { root.ast-saved(); }
+                ast-deleted => { root.ast-deleted(); }
+                ast-restored => { root.ast-restored(); }
+                ast-purged => { root.ast-purged(); }
+                ast-defaulted => { root.ast-defaulted(); }
+                ast-avatar-picked => { root.ast-avatar-picked(); }
+                ast-avatar-cleared => { root.ast-avatar-cleared(); }
+            }
+        }
+
+        // visible 只免渲染不免布局占位 → 条件子项用 if 块；状态回显在提供商页不出现（卡内自带）
+        if root.cfg-status != "" && settings-vl.tab != 1 : Text {
+            text: root.cfg-status;
+            color: Theme.p.link;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        // 全局「保存」只服务用户设定页；提供商/AI 助手页在详情卡内保存
+        if settings-vl.tab == 2 : HorizontalLayout {
+            spacing: 8px;
+            height: 30px;
+            Rectangle { horizontal-stretch: 1; }
+            Pill {
+                width: 88px;
+                label: "保存";
+                primary: true;
+                picked => {
+                    root.settings-saved(settings-vl.ed-persona);
+                }
+            }
+        }
     }
 
     // 标题栏 z 序最后绘制：盖在回收站遮罩之上，任何页面都能窗控
